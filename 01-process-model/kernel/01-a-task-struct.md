@@ -5,7 +5,7 @@
 > (Linux 6.9, x86-64)
 >
 > **Size:** approximately 9,280 bytes on x86-64 (varies with kernel config).
-> See Section 6 for how to measure it on your running kernel.
+> See Section 7 for how to measure it on your running kernel.
 
 `struct task_struct` is the kernel's complete description of a running or runnable
 process. Every process and every thread in the system — including kernel threads — is
@@ -256,9 +256,16 @@ accidental direct access) encodes the current execution state of the task.
     } while (0)
 ```
 
+> **Note:** simplified for clarity. The actual Linux 6.9 implementation uses
+> `smp_store_mb(current->__state, state_value)` — a combined store + full memory
+> barrier — not two separate operations.
+
 The `smp_mb()` is critical: it ensures that the state change is visible to all CPUs
 before the task actually blocks. Without this barrier, the wakeup path could miss the
 sleeping state.
+
+> **Note:** `set_task_state()` was removed in Linux 5.17. On kernels 5.17+, use
+> `WRITE_ONCE(tsk->__state, state_value)` directly.
 
 **Who reads it:** The scheduler (`kernel/sched/core.c`) reads `__state` to decide
 whether a task is eligible to run. The `try_to_wake_up()` function checks that the
@@ -455,7 +462,7 @@ happens.
 # View the vruntime of all tasks on CPU 0's CFS run queue (requires root + debugfs)
 cat /sys/kernel/debug/sched/debug | grep -A 5 "cfs_rq\[0\]"
 
-# bpftrace: print vruntime of every task scheduled in
+# bpftrace: print vruntime of every task scheduled OUT (prev task leaving CPU)
 bpftrace -e 'tracepoint:sched:sched_switch {
     printf("prev=%s vruntime=%llu\n",
         args->prev_comm,
@@ -553,10 +560,11 @@ for p in /proc/[0-9]*/ns/net; do
     [ "$(readlink $p)" = "$NS" ] && echo "$p"
 done
 
-# bpftrace: print nsproxy address on every clone()
-bpftrace -e 'kretprobe:copy_namespaces {
-    printf("new nsproxy=%p task=%d\n", retval,
-        ((struct task_struct *)curtask)->pid);
+# bpftrace: traces copy_namespaces entry, showing which task is creating new namespaces
+bpftrace -e 'kprobe:copy_namespaces {
+    printf("copy_namespaces: task=%d flags=0x%lx\n",
+        ((struct task_struct *)curtask)->pid,
+        (uint64)arg0);
 }'
 ```
 
@@ -981,9 +989,12 @@ ls /proc/<pid>/task/          # each subdirectory is a thread (tid)
 cat /proc/<pid>/status | grep Threads   # count of threads in thread group
 
 # bpftrace: trace new thread creation (CLONE_THREAD flag)
+# Note: since Linux 5.3, copy_process() takes struct kernel_clone_args * as its first argument
 bpftrace -e 'kprobe:copy_process {
-    if ((uint64)arg2 & 0x10000) {  /* CLONE_THREAD = 0x10000 */
-        printf("new thread: parent=%d\n", curtask->tgid);
+    $args = (struct kernel_clone_args *)arg0;
+    if ($args->flags & 0x10000) {
+        printf("new thread in tgid=%d\n",
+            ((struct task_struct *)curtask)->tgid);
     }
 }'
 ```
@@ -1034,7 +1045,7 @@ Lifecycle of a task_struct
      │  alloc_pid() → allocate struct pid with per-namespace numbers
      └► hash_pid() → insert into pid hash tables
 
-   set_task_state(p, TASK_NEW)
+   WRITE_ONCE(p->__state, TASK_NEW)   /* set_task_state() removed in Linux 5.17 */
    wake_up_new_task(p)                      ← sets TASK_RUNNING, adds to run queue
 
 
@@ -1306,7 +1317,7 @@ cat /proc/self/status
 # CapBnd:   000001ffffffffff       ← cred->cap_bset
 
 # Process tree position
-cat /proc/self/stat   # 52-field colon-separated summary including ppid, state, prio
+cat /proc/self/stat   # 52-field space-separated summary including ppid, state, prio
 cat /proc/self/wchan  # kernel function the task is sleeping in (task->__state == TASK_INTERRUPTIBLE)
 cat /proc/self/comm   # the comm field, 15 chars max
 cat /proc/self/cmdline | tr '\0' ' '  # full command line from mm->arg_start
@@ -1360,7 +1371,7 @@ bpftrace -e 'kprobe:create_pid_namespace {
     printf("new pid_ns: creating task pid=%d\n", curtask->pid);
 }'
 
-# Show vruntime of tasks being scheduled out
+# Show vruntime of tasks being scheduled OUT (prev task leaving CPU)
 bpftrace -e 'tracepoint:sched:sched_switch {
     printf("out: comm=%s vruntime=%llu\n",
         args->prev_comm,
@@ -1370,7 +1381,9 @@ bpftrace -e 'tracepoint:sched:sched_switch {
 # Print nsproxy address for all tasks in a specific PID namespace
 # First find the namespace inode:
 NS_INO=$(stat -L --format '%i' /proc/$(pidof nginx)/ns/pid)
-bpftrace -e "kprobe:do_fork {
+# Step 2: now use this inode to filter — example:
+# Note: kprobe:do_fork was replaced by kprobe:kernel_clone in Linux 5.10 (commit cad6967ac298)
+bpftrace -e "kprobe:kernel_clone {
     \$task = (struct task_struct *)curtask;
     printf(\"fork: pid=%d nsproxy=%p\\n\", \$task->pid, \$task->nsproxy);
 }"
