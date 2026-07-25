@@ -60,7 +60,7 @@ struct sock {
     int                  sk_sndbuf;       // send buffer size (bytes) — wmem_default
     struct sk_buff_head  sk_receive_queue;// received-but-not-read packets
     struct sk_buff_head  sk_write_queue;  // data waiting to be sent / retransmitted
-    refcount_t           sk_wmem_alloc;   // bytes charged against sndbuf
+    refcount_t           sk_wmem_alloc;   // refcount for send-path skb allocations (proxy for sndbuf pressure)
     atomic_t             sk_rmem_alloc;   // bytes charged against rcvbuf
     struct socket       *sk_socket;       // back-pointer to struct socket
     void                *sk_user_data;    // user-set pointer (used by some protocols/hooks)
@@ -114,13 +114,14 @@ struct tcp_sock {
     u32     rcv_wnd;            // our receive window (limits how much peer can send us)
 
     /* Congestion control */
-    u32     snd_cwnd;           // congestion window (bytes; Reno, CUBIC, BBR manage this)
+    u32     snd_cwnd;           // congestion window (in segments/MSS units; multiply by mss_cache for bytes)
     u32     snd_ssthresh;       // slow-start threshold
 
     /* RTT estimation */
     u32     srtt_us;            // smoothed RTT in microseconds (EWMA of measured RTTs)
     u32     mdev_us;            // mean deviation of RTT (used to compute RTO)
-    u32     rto;                // retransmission timeout (in jiffies)
+    // rto lives in the embedded inet_connection_sock as icsk_rto:
+    // tcp_sock.inet_conn.icsk_rto (u32, in jiffies) — access via inet_csk(sk)->icsk_rto
 
     ktime_t tcp_clock_cache;    // cached TCP clock value (reduces clock_gettime cost)
 
@@ -143,7 +144,7 @@ struct tcp_sock
 
 Because each embedded struct is always the first field, `container_of()` with zero offset casts freely between them. A `struct sock *sk` received by `tcp_v4_rcv()` can be safely cast to `struct tcp_sock *` with `tcp_sk(sk)` — the macro expands to `container_of(sk, struct tcp_sock, inet_conn.icsk_inet.sk)`. This is not pointer arithmetic magic; it works because the C standard guarantees a struct and its first member share the same address.
 
-**Congestion control.** `snd_cwnd` (congestion window) is the sender-side limit on how much unacknowledged data can be in flight at once, expressed in bytes (older code used segments). It starts at the initial window (`TCP_INIT_CWND`, typically 10 segments), grows exponentially during slow start (doubling on each RTT until it exceeds `snd_ssthresh`), then grows linearly in congestion avoidance (one MSS per RTT). On packet loss (triple duplicate ACKs or RTO expiry), `snd_ssthresh` is set to half the current `snd_cwnd`, and `snd_cwnd` is reduced. BBR ignores loss as a primary signal and instead models bandwidth and RTT directly, keeping `snd_cwnd` proportional to the estimated bandwidth-delay product. The congestion control algorithm is pluggable; the active algorithm for a socket is stored in `inet_conn.icsk_ca_ops`.
+**Congestion control.** `snd_cwnd` (congestion window) is the sender-side limit on how much unacknowledged data can be in flight at once, expressed in segments (MSS units); multiply by `tp->mss_cache` to convert to bytes. It starts at the initial window (`TCP_INIT_CWND`, typically 10 segments), grows exponentially during slow start (doubling on each RTT until it exceeds `snd_ssthresh`), then grows linearly in congestion avoidance (one MSS per RTT). On packet loss (triple duplicate ACKs or RTO expiry), `snd_ssthresh` is set to half the current `snd_cwnd`, and `snd_cwnd` is reduced. BBR ignores loss as a primary signal and instead models bandwidth and RTT directly, keeping `snd_cwnd` proportional to the estimated bandwidth-delay product. The congestion control algorithm is pluggable; the active algorithm for a socket is stored in `inet_conn.icsk_ca_ops`.
 
 **RTT estimation.** `srtt_us` is an exponentially-weighted moving average (EWMA) of measured round-trip times. `mdev_us` is the mean deviation (a proxy for jitter). The retransmission timeout is computed as `RTO = srtt_us + 4 * mdev_us`, following RFC 6298. A connection with high jitter therefore gets a larger RTO, reducing spurious retransmissions at the cost of slower loss recovery.
 
