@@ -6,7 +6,7 @@ Full pod lifecycle — actor and kernel interface at each phase:
 
 | Phase | Actor | Kernel Interface |
 |-------|-------|-----------------|
-| Watch | kubelet | `inotify_add_watch()` on API server events (via client-go) |
+| Watch | kubelet | HTTP long-poll watch via client-go informer (API server) |
 | Admit | kubelet | Writes `cpu.max`, `memory.max`, `cpuset.cpus` to pod cgroup |
 | Sandbox | containerd | `clone(CLONE_NEWPID|CLONE_NEWNET|CLONE_NEWNS|...)` |
 | OOM setup | kubelet | Writes oom_score_adj to `/proc/<pid>/oom_score_adj` |
