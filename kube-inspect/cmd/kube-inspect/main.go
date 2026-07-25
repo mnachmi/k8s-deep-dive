@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/linux-to-k8s/kube-inspect/internal/cgroup"
+	"github.com/linux-to-k8s/kube-inspect/internal/netns"
 	"github.com/linux-to-k8s/kube-inspect/internal/proc"
 )
 
@@ -19,12 +20,13 @@ var (
 	flagCgroup     = flag.Bool("cgroup", false, "Show cgroup v2 resource stats (requires --pod)")
 	flagPSI        = flag.Bool("psi", false, "Show PSI pressure metrics and OOM events (requires --pod)")
 	flagMounts     = flag.Bool("mounts", false, "Show mount namespace table and overlay layer count (requires --pod)")
+	flagNetNS      = flag.Bool("netns", false, "Show network namespace interface stats (requires --pod)")
 )
 
 func main() {
 	flag.Parse()
 	if *flagPod == "" && !*flagNode {
-		fmt.Fprintln(os.Stderr, "usage: kube-inspect --pod <uid> [--namespaces] [--cgroup] [--psi] [--mounts] [--json]")
+		fmt.Fprintln(os.Stderr, "usage: kube-inspect --pod <uid> [--namespaces] [--cgroup] [--psi] [--mounts] [--netns] [--json]")
 		os.Exit(1)
 	}
 
@@ -130,6 +132,24 @@ func main() {
 							fmt.Printf("    overlay layers: %d\n", layers)
 						}
 					}
+				}
+			}
+		}
+
+		if *flagNetNS {
+			ifaces, err := netns.ListPodInterfaces(*flagPod)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "netns error: %v\n", err)
+			} else {
+				fmt.Printf("\nNetwork interfaces for pod %s:\n", *flagPod)
+				fmt.Printf("  %-12s %-12s %-8s %-8s %-8s %-12s %-8s %-8s %-8s\n",
+					"INTERFACE", "RX-BYTES", "RX-PKTS", "RX-ERR", "RX-DROP",
+					"TX-BYTES", "TX-PKTS", "TX-ERR", "TX-DROP")
+				for _, iface := range ifaces {
+					fmt.Printf("  %-12s %-12d %-8d %-8d %-8d %-12d %-8d %-8d %-8d\n",
+						iface.Name,
+						iface.RxBytes, iface.RxPackets, iface.RxErrors, iface.RxDropped,
+						iface.TxBytes, iface.TxPackets, iface.TxErrors, iface.TxDropped)
 				}
 			}
 		}
