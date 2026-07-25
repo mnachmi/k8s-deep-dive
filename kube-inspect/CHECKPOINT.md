@@ -5,7 +5,7 @@ Each chapter adds capabilities to this tool.
 | Chapter | Checkpoint | Package | Status |
 |---------|-----------|---------|--------|
 | 00 | CLI skeleton, no-op collectors | cmd/ | done |
-| 01 | List pod processes via /proc | internal/proc | pending |
+| 01 | List pod processes via /proc | internal/proc | done |
 | 02 | Namespace enumeration per pod | internal/proc | pending |
 | 03 | cgroup v2 stats per pod | internal/cgroup | pending |
 | 04 | PSI + OOM events per pod | internal/cgroup | pending |
