@@ -176,7 +176,7 @@ As the number of Services grows, iptables performance degrades linearly because 
 
 ### IPVS Kernel Integration
 
-IPVS registers its Netfilter hook at `NF_INET_LOCAL_IN` rather than `NF_INET_PRE_ROUTING`. For each incoming packet destined for a virtual server IP, `ip_vs_schedule()` selects a real server (backend pod) according to the configured scheduling algorithm (round-robin, least-connection, etc.). IPVS then uses conntrack for connection state tracking, ensuring reply packets are correctly handled without re-scheduling.
+IPVS registers Netfilter hooks at both `NF_INET_LOCAL_IN` (for packets destined for this host's virtual server IP) and `NF_INET_FORWARD` (for forwarded packets). For each incoming packet destined for a virtual server IP, `ip_vs_schedule()` selects a real server (backend pod) according to the configured scheduling algorithm (round-robin, least-connection, etc.). IPVS then uses conntrack for connection state tracking, ensuring reply packets are correctly handled without re-scheduling. See `ip_vs_core.c` for the full `nf_hook_ops` registration array covering both hook points.
 
 Source: https://elixir.bootlin.com/linux/v6.9/source/net/netfilter/ipvs/ip_vs_core.c
 
