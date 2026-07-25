@@ -71,7 +71,7 @@ stress-ng --vm 1 --vm-bytes 4G --vm-keep
 watch -n 2 ./psi-reader
 ```
 
-**(b) Add a `--watch` flag** that loops every 2 seconds and clears the screen between updates, so you can observe PSI values changing in real time as memory pressure increases.
+**(b) Add a `--threshold` flag** that uses `poll(2)` on a PSI file to receive kernel-driven notifications when pressure exceeds a threshold — no busy-loop required. Write a trigger string like `"some 50000 1000000"` (stall > 50ms in a 1s window) to the file descriptor, then call `poll(fd, POLLPRI)`. The kernel wakes you up exactly when the threshold is crossed. This is the same mechanism systemd-oomd and the kubelet eviction manager use. See `kernel/sched/psi.c:psi_trigger_create()` at https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/psi.c for the kernel side. Note: writing triggers to cgroup PSI files requires write permission (root or appropriate capability).
 
 **(c) Add a `--json` flag** that outputs PSI data as JSON instead of the human-readable table, suitable for ingestion by monitoring pipelines or `jq` processing.
 
