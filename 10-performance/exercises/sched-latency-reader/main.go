@@ -9,11 +9,11 @@
 // Build: go build -o sched-latency-reader .
 //
 // Kernel paths:
-//   /proc/<pid>/schedstat  → kernel/sched/stats.c
+//   /proc/<pid>/schedstat  → fs/proc/base.c (proc_pid_schedstat)
 //   cgroup cpu.stat        → kernel/sched/fair.c (struct cfs_bandwidth)
 //
 // Sources:
-//   https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/stats.c
+//   https://elixir.bootlin.com/linux/v6.9/source/fs/proc/base.c
 //   https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/fair.c
 package main
 
@@ -163,8 +163,8 @@ func runPID(pid int) {
 	}
 	fmt.Printf("=== /proc/%d/schedstat ===\n", pid)
 	printSchedStat(s)
-	fmt.Printf("\nKernel path: /proc/%d/schedstat → kernel/sched/stats.c\n", pid)
-	fmt.Printf("Source: https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/stats.c\n")
+	fmt.Printf("\nKernel path: /proc/%d/schedstat → fs/proc/base.c (proc_pid_schedstat)\n", pid)
+	fmt.Printf("Source: https://elixir.bootlin.com/linux/v6.9/source/fs/proc/base.c\n")
 }
 
 func runPod(podUID string, showAll bool) {

@@ -4,12 +4,12 @@
 
 | Performance Problem | Kernel Signal | K8s Interface |
 |--------------------|--------------|---------------|
-| CPU starvation | `/proc/<pid>/schedstat` field 2 (`run_delay`) | `cpu.stat nr_throttled` |
+| CPU starvation | `/proc/<pid>/schedstat` field 2 (`run_delay`) | CPU manager static policy (cpuset isolation) |
 | CPU throttling | `cpu.stat throttled_usec` rising | `resources.limits.cpu` too low |
 | Cache miss storm | `PERF_COUNT_HW_CACHE_MISSES` via `perf_event_open` | `resources.limits.memory` (NUMA cross-socket) |
 | Branch mispredicts | `PERF_COUNT_HW_BRANCH_MISSES` via `perf_event_open` | CPU pinning (Topology Manager) |
 | Page fault flood | `PERF_COUNT_SW_PAGE_FAULTS_MAJ` via `perf_event_open` | `memory.events` `max` counter in cgroup |
-| High involuntary context switches | `/proc/<pid>/status` `voluntary_ctxt_switches` | RT task competing on shared cpuset |
+| High involuntary context switches | `/proc/<pid>/status` `nonvoluntary_ctxt_switches` | RT task competing on shared cpuset |
 
 The CFS bandwidth controller (`struct cfs_bandwidth` in `kernel/sched/sched.h`) is the bridge between `resources.limits.cpu` in a Pod spec and kernel scheduling enforcement. Kubelet translates the CPU limit to `cpu.max` (cgroupv2) or `cpu.cfs_quota_us` + `cpu.cfs_period_us` (cgroupv1). When a cgroup exhausts its quota in a period, `throttle_cfs_rq()` in `kernel/sched/fair.c` dequeues the CFS runqueue and sets it throttled until the next period fires via `sched_cfs_period_timer()`.
 
@@ -267,7 +267,7 @@ done | sort -rn | head -10
 | Symbol | File | URL |
 |--------|------|-----|
 | `perf_event_open()` | `kernel/events/core.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/events/core.c |
-| `struct sched_statistics` | `kernel/sched/stats.h` | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/stats.h |
+| `struct sched_statistics` | `include/linux/sched.h` | https://elixir.bootlin.com/linux/v6.9/source/include/linux/sched.h |
 | `throttle_cfs_rq()` | `kernel/sched/fair.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/fair.c |
 | `struct tracepoint` | `include/linux/tracepoint.h` | https://elixir.bootlin.com/linux/v6.9/source/include/linux/tracepoint.h |
 | `struct cfs_bandwidth` | `kernel/sched/sched.h` | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/sched.h |

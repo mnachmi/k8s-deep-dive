@@ -37,12 +37,12 @@ go build -o sched-latency-reader .
 
 | Field | Kernel Source |
 |-------|--------------|
-| `/proc/<pid>/schedstat` | `kernel/sched/stats.c` — `sched_statistics.wait_sum` |
+| `/proc/<pid>/schedstat` | `fs/proc/base.c` — `proc_pid_schedstat()` |
 | `cpu.stat nr_throttled` | `kernel/sched/fair.c` — `struct cfs_bandwidth.nr_throttled` |
 | `cpu.stat throttled_usec` | `kernel/sched/fair.c` — `cfs_bandwidth.throttled_time` |
 
 Sources:
-https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/stats.c
+https://elixir.bootlin.com/linux/v6.9/source/fs/proc/base.c
 https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/fair.c
 
 ## Exercises
