@@ -109,7 +109,7 @@ Containers typically have 20–40 mounts compared to 50–150 on a typical host,
 Extend the tool to parse `OptionalFields` and extract peer group IDs:
 - `shared:N` — this mount is in peer group N (bidirectional propagation)
 - `master:N` — this mount receives propagation from peer group N (slave)
-- `peer:N` — alternative notation; same peer group
+- `unbindable` — this mount cannot be used as a bind-mount source
 
 Group mounts by peer group ID to see which mounts share propagation. On a Kubernetes node, bind mounts for volumes use `shared:` so that mounts created inside a container are visible to the host kubelet (needed for `hostPath` and CSI volume drivers).
 
