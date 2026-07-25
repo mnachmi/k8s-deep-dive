@@ -24,10 +24,8 @@
 
 #define _GNU_SOURCE
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <errno.h>
 #include <sys/syscall.h>
 #include <sys/ioctl.h>
 #include <linux/perf_event.h>
@@ -51,7 +49,7 @@ static int open_event(__u32 type, __u64 config, int group_fd)
     attr.exclude_kernel = 1;
     attr.exclude_hv     = 1;
     /* PERF_FORMAT_GROUP: read() returns all group members at once */
-    attr.read_format    = (group_fd == -1) ? 0 : PERF_FORMAT_GROUP;
+    attr.read_format    = (group_fd == -1) ? PERF_FORMAT_GROUP : 0;
     int fd = (int)perf_event_open(&attr, 0 /*self*/, -1 /*any cpu*/,
                                   group_fd, 0);
     if (fd < 0)
@@ -182,6 +180,8 @@ static void part_d(void)
 
         printf("  task_clock=%lld ns  page_faults=%lld  context_switches=%lld\n",
                read_counter(fd_clock), read_counter(fd_pf), read_counter(fd_cs));
+    } else {
+        printf("  (one or more software events not available)\n");
     }
     if (fd_clock >= 0) close(fd_clock);
     if (fd_pf >= 0)    close(fd_pf);
