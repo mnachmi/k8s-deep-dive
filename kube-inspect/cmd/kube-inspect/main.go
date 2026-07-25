@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/linux-to-k8s/kube-inspect/internal/cgroup"
 	"github.com/linux-to-k8s/kube-inspect/internal/proc"
 )
 
@@ -14,12 +15,13 @@ var (
 	flagNode       = flag.Bool("node", false, "Inspect all pods on this node")
 	flagJSON       = flag.Bool("json", false, "Output as JSON")
 	flagNamespaces = flag.Bool("namespaces", false, "Show namespace inodes per process (requires --pod)")
+	flagCgroup     = flag.Bool("cgroup", false, "Show cgroup v2 resource stats (requires --pod)")
 )
 
 func main() {
 	flag.Parse()
 	if *flagPod == "" && !*flagNode {
-		fmt.Fprintln(os.Stderr, "usage: kube-inspect --pod <uid> [--namespaces] [--json]")
+		fmt.Fprintln(os.Stderr, "usage: kube-inspect --pod <uid> [--namespaces] [--cgroup] [--json]")
 		os.Exit(1)
 	}
 
@@ -42,6 +44,7 @@ func main() {
 				p.PID, p.PPID, p.Comm, p.PidNsID, p.CgroupPath)
 		}
 		fmt.Printf("Total: %d processes\n", len(procs))
+
 		if *flagNamespaces {
 			nsInfos, err := proc.ListPodNamespaces(*flagPod)
 			if err != nil {
@@ -56,6 +59,28 @@ func main() {
 						n.NS["cgroup"], n.NS["ipc"], n.NS["mnt"],
 						n.NS["net"], n.NS["pid"], n.NS["user"], n.NS["uts"])
 				}
+			}
+		}
+
+		if *flagCgroup {
+			stats, err := cgroup.ReadPodStats(*flagPod)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "cgroup error: %v\n", err)
+			} else {
+				fmt.Printf("\nCgroup stats for pod %s:\n", *flagPod)
+				fmt.Printf("  Path:             %s\n", stats.CgroupPath)
+				fmt.Printf("  memory.current:   %d bytes\n", stats.MemoryCurrent)
+				fmt.Printf("  memory.max:       %s\n", stats.MemoryMax)
+				if stats.MemoryEvents != nil {
+					fmt.Printf("  memory.oom_kill:  %d\n", stats.MemoryEvents["oom_kill"])
+				}
+				fmt.Printf("  cpu.max:          %s\n", stats.CPUMax)
+				if stats.CPUStat != nil {
+					fmt.Printf("  cpu.nr_throttled: %d\n", stats.CPUStat["nr_throttled"])
+					fmt.Printf("  cpu.throttled_us: %d\n", stats.CPUStat["throttled_usec"])
+				}
+				fmt.Printf("  pids.current:     %d\n", stats.PidsCurrent)
+				fmt.Printf("  pids.max:         %s\n", stats.PidsMax)
 			}
 		}
 	}
