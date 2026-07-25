@@ -30,7 +30,7 @@ var (
 func main() {
 	flag.Parse()
 	if *flagPod == "" && !*flagNode {
-		fmt.Fprintln(os.Stderr, "usage: kube-inspect --pod <uid> [--namespaces] [--cgroup] [--psi] [--mounts] [--netns] [--ebpf] [--json]")
+		fmt.Fprintln(os.Stderr, "usage: kube-inspect --pod <uid> [--namespaces] [--cgroup] [--psi] [--mounts] [--netns] [--ebpf] [--sched] [--json]")
 		os.Exit(1)
 	}
 
