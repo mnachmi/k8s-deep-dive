@@ -16,12 +16,13 @@ var (
 	flagJSON       = flag.Bool("json", false, "Output as JSON")
 	flagNamespaces = flag.Bool("namespaces", false, "Show namespace inodes per process (requires --pod)")
 	flagCgroup     = flag.Bool("cgroup", false, "Show cgroup v2 resource stats (requires --pod)")
+	flagPSI        = flag.Bool("psi", false, "Show PSI pressure metrics and OOM events (requires --pod)")
 )
 
 func main() {
 	flag.Parse()
 	if *flagPod == "" && !*flagNode {
-		fmt.Fprintln(os.Stderr, "usage: kube-inspect --pod <uid> [--namespaces] [--cgroup] [--json]")
+		fmt.Fprintln(os.Stderr, "usage: kube-inspect --pod <uid> [--namespaces] [--cgroup] [--psi] [--json]")
 		os.Exit(1)
 	}
 
@@ -81,6 +82,26 @@ func main() {
 				}
 				fmt.Printf("  pids.current:     %d\n", stats.PidsCurrent)
 				fmt.Printf("  pids.max:         %s\n", stats.PidsMax)
+			}
+		}
+
+		if *flagPSI {
+			psi, err := cgroup.ReadPodPSI(*flagPod)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "psi error: %v\n", err)
+			} else {
+				fmt.Printf("\nPSI pressure for pod %s:\n", *flagPod)
+				fmt.Printf("  Path:              %s\n", psi.CgroupPath)
+				fmt.Printf("  memory.some  avg10=%.2f avg60=%.2f avg300=%.2f\n",
+					psi.MemorySome.Avg10, psi.MemorySome.Avg60, psi.MemorySome.Avg300)
+				fmt.Printf("  memory.full  avg10=%.2f avg60=%.2f avg300=%.2f\n",
+					psi.MemoryFull.Avg10, psi.MemoryFull.Avg60, psi.MemoryFull.Avg300)
+				fmt.Printf("  cpu.some     avg10=%.2f avg60=%.2f avg300=%.2f\n",
+					psi.CPUSome.Avg10, psi.CPUSome.Avg60, psi.CPUSome.Avg300)
+				fmt.Printf("  io.some      avg10=%.2f avg60=%.2f avg300=%.2f\n",
+					psi.IOSome.Avg10, psi.IOSome.Avg60, psi.IOSome.Avg300)
+				fmt.Printf("  oom_events:  %d  oom_kills: %d\n",
+					psi.OOMCount, psi.OOMKillCount)
 			}
 		}
 	}

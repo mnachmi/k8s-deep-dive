@@ -116,3 +116,87 @@ func ReadPodStats(podUID string) (*PodStats, error) {
 
 	return s, nil
 }
+
+// PSILine holds one "some" or "full" entry from a PSI pressure file.
+type PSILine struct {
+	Avg10  float64 `json:"avg10"`
+	Avg60  float64 `json:"avg60"`
+	Avg300 float64 `json:"avg300"`
+	Total  uint64  `json:"total_usec"`
+}
+
+// PodPSI holds PSI pressure and OOM event data for a pod's cgroup.
+type PodPSI struct {
+	CgroupPath string `json:"cgroup_path"`
+
+	MemorySome PSILine `json:"memory_some"`
+	MemoryFull PSILine `json:"memory_full"`
+	CPUSome    PSILine `json:"cpu_some"`
+	IOSome     PSILine `json:"io_some"`
+	IOFull     PSILine `json:"io_full"`
+
+	OOMCount     uint64 `json:"oom_count"`
+	OOMKillCount uint64 `json:"oom_kill_count"`
+}
+
+func parsePSILineFields(line string) PSILine {
+	var p PSILine
+	for _, field := range strings.Fields(line) {
+		kv := strings.SplitN(field, "=", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		switch kv[0] {
+		case "avg10":
+			p.Avg10, _ = strconv.ParseFloat(kv[1], 64)
+		case "avg60":
+			p.Avg60, _ = strconv.ParseFloat(kv[1], 64)
+		case "avg300":
+			p.Avg300, _ = strconv.ParseFloat(kv[1], 64)
+		case "total":
+			p.Total, _ = strconv.ParseUint(kv[1], 10, 64)
+		}
+	}
+	return p
+}
+
+func readPSIFile(path string) (some PSILine, full PSILine) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "some "):
+			some = parsePSILineFields(strings.TrimPrefix(line, "some "))
+		case strings.HasPrefix(line, "full "):
+			full = parsePSILineFields(strings.TrimPrefix(line, "full "))
+		}
+	}
+	return
+}
+
+// ReadPodPSI returns PSI pressure and OOM event data for the given pod UID.
+func ReadPodPSI(podUID string) (*PodPSI, error) {
+	cgPath, err := findPodCgroup(podUID)
+	if err != nil {
+		return nil, err
+	}
+
+	p := &PodPSI{CgroupPath: cgPath}
+
+	p.MemorySome, p.MemoryFull = readPSIFile(filepath.Join(cgPath, "memory.pressure"))
+	p.CPUSome, _ = readPSIFile(filepath.Join(cgPath, "cpu.pressure"))
+	p.IOSome, p.IOFull = readPSIFile(filepath.Join(cgPath, "io.pressure"))
+
+	events := readKV(filepath.Join(cgPath, "memory.events"))
+	if events != nil {
+		p.OOMCount = events["oom"]
+		p.OOMKillCount = events["oom_kill"]
+	}
+
+	return p, nil
+}
