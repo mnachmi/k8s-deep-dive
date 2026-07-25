@@ -100,14 +100,14 @@ When a task in the group runs, `account_cfs_rq_runtime()` debits `cfs_b->runtime
 # Show per-task scheduler statistics (vruntime, nr_switches, etc.)
 cat /proc/$(pgrep -n nginx)/sched
 
-# bpftrace: log vruntime of picked tasks
+# bpftrace: log priority of picked tasks (sched_switch args expose prio, not vruntime)
 bpftrace -e '
 tracepoint:sched:sched_switch {
-    printf("next=%s vruntime=%llu\n", args->next_comm, args->next_prio);
+    printf("next=%-16s prio=%d\n", args->next_comm, args->next_prio);
 }'
 
-# Watch CFS throttle events (when cpu.max is set on a pod)
-bpftrace -e 'tracepoint:sched:sched_cfs_throttle_max_vruntime { printf("throttle: cgroup=%u\n", args->cgroup_id); }'
+# Watch CFS throttle events via kprobe on throttle_cfs_rq (called when cpu.max quota exhausted)
+bpftrace -e 'kprobe:throttle_cfs_rq { printf("throttle pid=%d comm=%s\n", pid, comm); }'
 
 # Check per-cgroup CPU stats (cgroup v2)
 cat /sys/fs/cgroup/kubepods.slice/kubepods-pod<uid>.slice/cpu.stat
