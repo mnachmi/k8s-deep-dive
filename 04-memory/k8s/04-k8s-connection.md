@@ -294,3 +294,18 @@ kubectl get events --field-selector reason=TopologyAffinityError -n <namespace>
 **THP latency spikes** → `khugepaged` called `collapse_huge_page()` which calls `compact_zone()` to assemble contiguous pages. The buddy allocator's fragmentation state (`free_area[MAX_ORDER]` in `struct zone` — 04-b-page-allocator.md) determines whether compaction succeeds quickly or stalls.
 
 **NUMA remote memory** → Task is accessing pages in a different `pg_data_t` than its running CPU belongs to. `task_numa_fault()` (04-d-numa.md) will eventually detect and fix this, but until migration completes, every cache miss pays ~2× latency.
+
+---
+
+## Key Kernel References
+
+| Symbol | Source File | URL | Purpose |
+|--------|-------------|-----|---------|
+| `mem_cgroup_out_of_memory()` | `mm/memcontrol.c` | https://elixir.bootlin.com/linux/v6.9/source/mm/memcontrol.c | Entry point for cgroup OOM kill; selects victim process when cgroup exceeds `memory.max` |
+| `oom_kill_process()` | `mm/oom_kill.c` | https://elixir.bootlin.com/linux/v6.9/source/mm/oom_kill.c | Sends SIGKILL to the OOM-selected process and its children |
+| `si_meminfo_node()` | `mm/page_alloc.c` | https://elixir.bootlin.com/linux/v6.9/source/mm/page_alloc.c | Computes per-node memory statistics (MemAvailable) read by kubelet eviction manager via `/proc/meminfo` |
+| `compact_zone()` | `mm/compaction.c` | https://elixir.bootlin.com/linux/v6.9/source/mm/compaction.c | Migrates pages to defragment a zone; called by `khugepaged` when assembling contiguous 2 MiB blocks for THP |
+| `collapse_huge_page()` | `mm/khugepaged.c` | https://elixir.bootlin.com/linux/v6.9/source/mm/khugepaged.c | `khugepaged` function that promotes 512 adjacent 4 KiB pages into a single 2 MiB transparent huge page |
+| `__alloc_pages_noprof()` | `mm/page_alloc.c` | https://elixir.bootlin.com/linux/v6.9/source/mm/page_alloc.c | Core page allocator; checks `cpuset_current_mems_allowed()` to enforce NUMA restrictions from `cpuset.mems` |
+| `cpuset_current_mems_allowed()` | `kernel/cgroup/cpuset.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/cgroup/cpuset.c | Returns the nodemask of NUMA nodes allowed for the current task; enforces `cpuset.mems` cgroup setting |
+| `task_numa_fault()` | `mm/numa_balancing.c` | https://elixir.bootlin.com/linux/v6.9/source/mm/numa_balancing.c | Records NUMA page faults and triggers automatic page migration to move memory closer to the accessing CPU |
