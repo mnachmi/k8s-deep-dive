@@ -81,10 +81,10 @@ struct ovl_inode {
     const char     *redirect;               // redirect xattr for cross-layer renames
     u64             version;                // version counter for d_revalidate
     unsigned long   flags;                  // OVL_COPY_UP_FINISHED, OVL_WHITEOUT, OVL_INDEX...
-    struct inode    vfs_inode;              // embedded VFS inode (MUST be last field)
     struct dentry  *__upperdentry;          // upper layer dentry (NULL if not copied up yet)
     struct ovl_path lowerpath;              // primary lower layer path {dentry, mnt}
     struct ovl_path *lowerstack;            // all lower paths for multi-layer files
+    struct inode    vfs_inode;              // embedded VFS inode (MUST be last field)
 };
 ```
 
