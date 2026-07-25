@@ -77,7 +77,7 @@ SCHED_DEADLINE (EDF — Earliest Deadline First) takes three parameters: `runtim
 struct sched_dl_entity {
     struct rb_node      rb_node;        // position in dl_rq red-black tree
     u64                 dl_runtime;     // budget in ns per period
-    u64                 dl_deadline;    // absolute deadline (ns, from rq->clock)
+    u64                 dl_deadline;    // relative deadline attribute in ns (set by sched_setattr)
     u64                 dl_period;      // replenishment period in ns
     u64                 dl_bw;          // dl_runtime / dl_period (bandwidth fraction)
     unsigned int        dl_throttled:1; // overrun: suspended until next period
@@ -92,12 +92,11 @@ struct sched_dl_entity {
 
 `struct sched_domain` forms a hierarchy from innermost (SMT siblings) to outermost (NUMA nodes). Built by `build_sched_domains()`:
 
-```
-sched_domain_topology (global array):
-  SD_TOPOLOGY_LEVEL_SMT   → spans HT siblings (same physical core)
-  SD_TOPOLOGY_LEVEL_MC    → spans cores (same LLC)
-  SD_TOPOLOGY_LEVEL_NUMA  → spans NUMA nodes
-```
+`sched_domain_topology[]` in `kernel/sched/topology.c` is a static array of `struct sched_domain_topology_level` entries, each pairing a CPU mask function with a set of `SD_*` flags:
+
+- SMT level: mask = `cpu_smt_mask`, flags include `SD_SHARE_CPUCAPACITY` — spans HT siblings on the same physical core
+- MC level: mask = `cpu_coregroup_mask`, flags include `SD_SHARE_PKG_RESOURCES` — spans cores sharing an LLC
+- NUMA level: mask = `cpu_cpu_mask` (or NUMA-node mask), flags include `SD_NUMA` — spans NUMA nodes
 
 Load balancing runs at each level: `load_balance()` starts at the current CPU's innermost domain and walks up to the root. Each domain has `imbalance_pct`, `cache_nice_tries`, and `flags` controlling when migration is attempted. The `SD_NUMA` flag marks the NUMA boundary; `SD_BALANCE_FORK`/`SD_BALANCE_EXEC` control when newly created/exec'd tasks are balanced.
 
