@@ -11,6 +11,7 @@ import (
 	"github.com/linux-to-k8s/kube-inspect/internal/ebpf"
 	"github.com/linux-to-k8s/kube-inspect/internal/netns"
 	"github.com/linux-to-k8s/kube-inspect/internal/proc"
+	"github.com/linux-to-k8s/kube-inspect/internal/sched"
 )
 
 var (
@@ -23,6 +24,7 @@ var (
 	flagMounts     = flag.Bool("mounts", false, "Show mount namespace table and overlay layer count (requires --pod)")
 	flagNetNS      = flag.Bool("netns", false, "Show network namespace interface stats (requires --pod)")
 	flagEBPF       = flag.Bool("ebpf", false, "Show BPF objects (programs and maps) per pod (requires --pod)")
+	flagSched      = flag.Bool("sched", false, "Show CPU/NUMA affinity and cgroup cpu.weight/cpu.max for the pod")
 )
 
 func main() {
@@ -182,6 +184,31 @@ func main() {
 							m.MapID, m.KeySize, m.ValueSize, m.MaxEntries)
 					}
 				}
+			}
+		}
+
+		if *flagSched {
+			info, err := sched.GetPodSchedInfo(*flagPod)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "sched: %v\n", err)
+			} else {
+				fmt.Printf("Scheduler info for pod %s:\n\n", info.PodUID)
+				if info.CgroupCPUs != "" {
+					fmt.Printf("  cgroup cpuset.cpus  : %s\n", info.CgroupCPUs)
+					fmt.Printf("  cgroup cpuset.mems  : %s\n", info.CgroupMems)
+					fmt.Printf("  cgroup cpu.weight   : %s\n", info.CPUWeight)
+					fmt.Printf("  cgroup cpu.max      : %s\n", info.CPUMax)
+				} else {
+					fmt.Printf("  (cgroup path not found for pod %s)\n", info.PodUID)
+				}
+				if len(info.ProcessAffinities) > 0 {
+					fmt.Printf("\n  Process affinities (deduplicated):\n")
+					for _, pa := range info.ProcessAffinities {
+						fmt.Printf("    PID=%-6d  comm=%-16s  cpus=%-10s  mems=%s\n",
+							pa.PID, pa.Comm, pa.CpusAllowedList, pa.MemsAllowedList)
+					}
+				}
+				fmt.Println()
 			}
 		}
 	}

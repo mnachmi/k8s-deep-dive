@@ -12,7 +12,7 @@ Each chapter adds capabilities to this tool.
 | 05 | Mount ns inspection, overlay layers | internal/proc | done |
 | 06 | Network ns interface stats | internal/netns | done |
 | 07 | eBPF objects per pod | internal/ebpf | done |
-| 08 | CPU affinity + NUMA placement | internal/cgroup | pending |
+| 08 | CPU affinity + NUMA placement | internal/sched | done |
 | 09 | Node pressure + eviction thresholds | internal/kubelet | pending |
 | 10 | Full perf report — complete tool | internal/metrics | pending |
 | 11 | Cluster health + kernel version audit | internal/ | pending |
