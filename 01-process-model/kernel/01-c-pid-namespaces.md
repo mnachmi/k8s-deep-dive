@@ -39,6 +39,7 @@ struct pid_namespace {
 #endif
     struct user_namespace *user_ns;     /* user namespace that owns this pid namespace */
     struct ucounts      *ucounts;       /* per-user resource accounting (RLIMIT_NPROC) */
+    spinlock_t           pid_lock;      /* protects the IDR allocator; held by alloc_pid() during idr_alloc_cyclic() */
     int                  reboot;        /* group exit code, set by sys_reboot(RESTART2) */
     struct ns_common     ns;            /* generic namespace data (inode, ops) */
 } __randomize_layout;
@@ -66,6 +67,14 @@ Inside a PID namespace, the IDR maps PID numbers (integers) to `struct pid *` po
 **Protected by:** `pid_namespace.pid_lock` — a per-namespace spinlock that serialises
 concurrent PID allocations. This is a key scalability improvement over the older
 approach that used a global `pidmap_lock`.
+
+#### `spinlock_t pid_lock` — IDR allocator lock
+
+Protects the IDR allocator (`idr` field) against concurrent access. `alloc_pid()`
+acquires `pid_lock` via `spin_lock_irq(&tmp->pid_lock)` before calling
+`idr_alloc_cyclic()`, and releases it immediately after. This per-namespace lock
+allows processes in different PID namespaces to allocate PIDs concurrently without
+contending on a single global lock.
 
 #### `struct task_struct *child_reaper` — the namespace's PID 1
 
@@ -312,6 +321,14 @@ struct task_struct *pid_task(struct pid *pid, enum pid_type type)
 }
 ```
 
+#### `struct hlist_head inodes` — inode back-references
+
+`inodes` is a hash list linking all inode objects (in `/proc` and `nsfs`) that
+reference this PID. It is used by `proc_flush_pid()` to invalidate `/proc` entries
+when the process exits: the kernel walks `pid->inodes` and removes the associated
+dentries from the dcache, ensuring that stale `/proc/<pid>/` entries do not linger
+after the process is gone.
+
 #### `wait_queue_head_t wait_pidfd` — pidfd polling
 
 When a process opens a `pidfd` (a file descriptor referring to a process, introduced
@@ -414,6 +431,35 @@ struct pid *alloc_pid(struct pid_namespace *ns,
 The outer loop runs from `ns->level` (deepest namespace) down to 0 (host namespace),
 allocating a PID number in each namespace and recording it in `numbers[i]`. Each
 allocation is serialised by the per-namespace `pid_lock` spinlock.
+
+### 2.5 Lifecycle
+
+```
+alloc_pid(ns, set_tid, set_tid_size)    ← kernel/pid.c:180
+  │  kmem_cache_alloc(ns->pid_cachep)   — allocates struct pid sized for level+1 upids
+  │  for i = ns->level down to 0:
+  │      spin_lock_irq(&tmp->pid_lock)
+  │      idr_alloc_cyclic(&tmp->idr, ...)  — reserves PID number in each namespace level
+  │      spin_unlock_irq(&tmp->pid_lock)
+  │      pid->numbers[i] = { .nr = nr, .ns = tmp }
+  └►  refcount_set(&pid->count, 1)      — initial reference held by copy_process()
+
+process runs (task_struct.thread_pid holds a reference via get_pid())
+
+put_pid(pid)                            ← called by do_exit() → release_task()
+  │  if refcount_dec_and_test(&pid->count):
+  │      free_pid(pid)
+  │        for i = 0..pid->level:
+  │            idr_remove(&ns->idr, pid->numbers[i].nr)
+  └►      kmem_cache_free(ns->pid_cachep, pid)
+```
+
+`alloc_pid()` allocates a `struct pid` from the per-namespace slab cache and fills
+the `numbers[]` array with one IDR-allocated integer per namespace level. `free_pid()`
+is reached via `put_pid()` when the reference count hits zero — this removes the PID
+from all IDR tables and returns memory to the slab. Open `/proc/<pid>/` directories
+and pidfd file descriptors each hold their own reference, so the `struct pid` may
+outlive the `task_struct` briefly.
 
 ---
 
@@ -702,8 +748,12 @@ bpftrace -e 'kprobe:alloc_pid {
 
 # Trace PID 1 assignment in a new namespace
 # When is_child_reaper() returns true, the task becomes PID 1
+# Linux 6.9 copy_process signature:
+#   static struct task_struct *copy_process(struct pid *pid, int trace,
+#                                           int node, struct kernel_clone_args *args)
+# So struct kernel_clone_args * is arg3, not arg0.
 bpftrace -e 'kprobe:copy_process {
-    $args = (struct kernel_clone_args *)arg0;
+    $args = (struct kernel_clone_args *)arg3;
     if ($args->flags & 0x20000000) {  /* CLONE_NEWPID */
         printf("CLONE_NEWPID: caller=%s pid=%d creating new pid namespace\n",
             comm, curtask->pid);

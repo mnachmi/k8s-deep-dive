@@ -116,7 +116,7 @@ struct clone_args {
     __aligned_u64 stack;        /* New stack pointer, or 0 for copy */
     __aligned_u64 stack_size;   /* Size of new stack (used with stack) */
     __aligned_u64 tls;          /* TLS value for new thread (CLONE_SETTLS) */
-    __aligned_u64 set_tid;      /* Pointer to array of desired PIDs (CLONE_INTO_CGROUP v2) */
+    __aligned_u64 set_tid;      /* Pointer to array of desired PID values, one per namespace level */
     __aligned_u64 set_tid_size; /* Number of PIDs in set_tid array */
     __aligned_u64 cgroup;       /* cgroup fd to place child into (CLONE_INTO_CGROUP) */
 };
@@ -916,7 +916,7 @@ lsns -t pid
 # Note: kernel_clone replaced do_fork/kernel_thread in Linux 5.10
 # On Linux 6.9, all process/thread creation goes through kernel_clone
 bpftrace -e 'kprobe:kernel_clone {
-    $args = (struct kernel_clone_args *)arg0;
+    $args = (struct kernel_clone_args *)arg0;  /* kernel_clone: arg0 = struct kernel_clone_args * */
     printf("kernel_clone: caller=%s flags=0x%llx exit_signal=%llu\n",
         comm,
         $args->flags,
