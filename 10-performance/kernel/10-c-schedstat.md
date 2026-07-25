@@ -4,7 +4,8 @@
 
 | File | Key Symbols | URL |
 |------|-------------|-----|
-| `kernel/sched/stats.h` | `schedstat_*` macros, `struct sched_statistics` | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/stats.h |
+| `include/linux/sched.h` | `struct sched_statistics` | https://elixir.bootlin.com/linux/v6.9/source/include/linux/sched.h |
+| `kernel/sched/stats.h` | `schedstat_*` macros, inline stat helpers | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/stats.h |
 | `kernel/sched/stats.c` | `/proc/schedstat`, `/proc/<pid>/schedstat` handlers | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/stats.c |
 | `kernel/sched/fair.c` | `update_curr()`, `cfs_rq->exec_clock`, CFS latency stats | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/fair.c |
 | `kernel/sched/fair.c` | `throttle_cfs_rq()`, `unthrottle_cfs_rq()`, `cfs_b->throttled_time` | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/fair.c |
@@ -15,7 +16,7 @@
 When `CONFIG_SCHEDSTATS=y`, each `struct task_struct` embeds `struct sched_statistics stats` via `struct sched_entity.statistics`. The entire struct is compiled out when `CONFIG_SCHEDSTATS` is not set — all fields and the `schedstat_*` helper macros become no-ops.
 
 ```c
-// kernel/sched/stats.h (Linux 6.9)
+// include/linux/sched.h (Linux 6.9)
 struct sched_statistics {
 #ifdef CONFIG_SCHEDSTATS
     u64         wait_start;            // timestamp when task entered runqueue
@@ -31,7 +32,8 @@ struct sched_statistics {
 
     u64         block_start;
     u64         block_max;
-    u64         exec_max;
+    s64         sum_block_runtime;
+    s64         exec_max;
     u64         slice_max;
 
     u64         nr_migrations_cold;
@@ -49,6 +51,10 @@ struct sched_statistics {
     u64         nr_wakeups_affine_attempts;
     u64         nr_wakeups_passive;
     u64         nr_wakeups_idle;
+
+#ifdef CONFIG_SCHED_CORE
+    u64         core_forceidle_sum;
+#endif
 #endif
 };
 ```
@@ -59,15 +65,22 @@ The migration counters (`nr_failed_migrations_affine`, `nr_forced_migrations`, e
 
 ## 3. `/proc/<pid>/schedstat`
 
-Format — 3 space-separated fields on a single line:
+Format — 3 space-separated fields on a single line, produced by `proc_pid_schedstat()` in `fs/proc/base.c`:
+
+```c
+seq_printf(m, "%llu %llu %lu\n",
+    (unsigned long long)task->se.sum_exec_runtime,
+    (unsigned long long)task->sched_info.run_delay,
+    task->sched_info.pcount);
+```
 
 ```
-<sum_exec_runtime_ns> <wait_sum_ns> <nr_switches>
+<sum_exec_runtime_ns> <run_delay_ns> <pcount>
 ```
 
-- `sum_exec_runtime_ns`: total nanoseconds the task has been running on CPU since it started
-- `wait_sum_ns`: total nanoseconds the task has spent waiting on the runqueue (scheduler latency, not IO wait)
-- `nr_switches`: total number of voluntary and involuntary context switches
+- `sum_exec_runtime_ns`: total nanoseconds the task has been running on CPU since it started (`task->se.sum_exec_runtime`, from `struct sched_entity`)
+- `run_delay_ns`: total nanoseconds the task has spent waiting on the runqueue — scheduler latency, not IO wait (`task->sched_info.run_delay`, from `struct sched_info`, guarded by `CONFIG_SCHED_INFO`)
+- `pcount`: total number of times the task was scheduled onto a CPU (`task->sched_info.pcount`, from `struct sched_info`)
 
 Example:
 
@@ -76,11 +89,11 @@ Example:
 5234567890 876543210 4231
 ```
 
-This task has spent 5.23 s on CPU, 876 ms waiting in the runqueue, and has been context-switched 4231 times.
+This task has spent 5.23 s on CPU, 876 ms waiting in the runqueue, and has been scheduled 4231 times.
 
-**Scheduler latency ratio**: `wait_sum / (wait_sum + sum_exec_runtime)`. For the example above: `876 / (876 + 5234)` ≈ 14 %. A ratio above 10 % on a non-IO-bound process is a strong signal of CPU contention or CFS throttling. IO-bound workloads (databases, network proxies) naturally accumulate IO sleep time in other counters, but `wait_sum` reflects only runqueue wait — the time when the task was runnable but could not get a CPU.
+**Scheduler latency ratio**: `run_delay / (run_delay + sum_exec_runtime)`. For the example above: `876 / (876 + 5234)` ≈ 14 %. A ratio above 10 % on a non-IO-bound process is a strong signal of CPU contention or CFS throttling. IO-bound workloads (databases, network proxies) naturally accumulate IO sleep time in other counters, but `run_delay` reflects only runqueue wait — the time when the task was runnable but could not get a CPU.
 
-Note: if `/proc/<pid>/schedstat` reports `0 0 0`, the kernel was built without `CONFIG_SCHEDSTATS=y`. Typical production distro kernels (Debian, Ubuntu, RHEL 9, GKE nodes, EKS nodes) enable `CONFIG_SCHEDSTATS` by default. Verify with `grep CONFIG_SCHEDSTATS /boot/config-$(uname -r)`.
+Note: if `/proc/<pid>/schedstat` reports `0 0 0`, the kernel was built without `CONFIG_SCHED_INFO=y`. The `sched_info.run_delay` and `sched_info.pcount` fields are gated by `CONFIG_SCHED_INFO`; when `sched_info_on()` returns false the handler emits zeros. Typical production distro kernels (Debian, Ubuntu, RHEL 9, GKE nodes, EKS nodes) enable `CONFIG_SCHED_INFO` (and `CONFIG_SCHEDSTATS`, which depends on it) by default. Verify with `grep CONFIG_SCHED_INFO /boot/config-$(uname -r)`.
 
 ## 4. `/proc/schedstat` — System-Wide
 
@@ -162,7 +175,7 @@ A throttle ratio above 5% for a latency-sensitive workload (API servers, gRPC ha
 ## 6. Latency Top Observation
 
 ```bash
-# Read /proc/<pid>/schedstat (3-field format: exec_ns wait_ns switches)
+# Read /proc/<pid>/schedstat (3-field format: exec_ns run_delay_ns pcount)
 cat /proc/$(pgrep -n nginx)/schedstat
 
 # System-wide runqueue latency per CPU
@@ -183,7 +196,7 @@ tracepoint:sched:sched_stat_wait {
 interval:s:5 { print(@wait_ns); clear(@wait_ns); }'
 ```
 
-The `sched_stat_wait` tracepoint fires each time a task leaves the runqueue to execute; `args->delay` is the nanosecond wait since enqueue. This mirrors exactly what `wait_sum` accumulates in `struct sched_statistics`, but aggregates it live by process name without needing `CONFIG_SCHEDSTATS`.
+The `sched_stat_wait` tracepoint fires each time a task leaves the runqueue to execute; `args->delay` is the nanosecond wait since enqueue. This mirrors exactly what `sched_info.run_delay` accumulates (and what `wait_sum` in `struct sched_statistics` also tracks for `CONFIG_SCHEDSTATS` users), but aggregates it live by process name without needing `CONFIG_SCHEDSTATS`.
 
 To find a pod's cgroup path more reliably on containerd nodes:
 
@@ -245,15 +258,15 @@ A container with throttled_usec growing at more than 5000 usec/s (0.5% of wall t
 
 | Symbol | File | URL |
 |--------|------|-----|
-| `struct sched_statistics` | `kernel/sched/stats.h` | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/stats.h |
-| `update_stats_wait_end()` | `kernel/sched/stats.h` | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/stats.h |
-| `/proc/<pid>/schedstat` handler | `kernel/sched/stats.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/stats.c |
+| `struct sched_statistics` | `include/linux/sched.h` | https://elixir.bootlin.com/linux/v6.9/source/include/linux/sched.h |
+| `update_stats_wait_end()` | `kernel/sched/stats.h` (inline wrapper; implementation in `kernel/sched/stats.c`) | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/stats.h |
+| `proc_pid_schedstat()` (`/proc/<pid>/schedstat` handler) | `fs/proc/base.c` | https://elixir.bootlin.com/linux/v6.9/source/fs/proc/base.c |
 | `throttle_cfs_rq()` | `kernel/sched/fair.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/fair.c |
 | `struct cfs_bandwidth` | `kernel/sched/sched.h` | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/sched.h |
 | `update_curr()` | `kernel/sched/fair.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/fair.c |
 
 **Notes on availability:**
 
-`struct sched_statistics` is only compiled in when the kernel is built with `CONFIG_SCHEDSTATS=y`. If `/proc/<pid>/schedstat` returns `0 0 0`, the kernel lacks this option. Verify: `grep CONFIG_SCHEDSTATS /boot/config-$(uname -r)`. Typical production distro kernels (Debian bookworm, Ubuntu 22.04/24.04, RHEL 9, GKE nodes, EKS nodes) ship with `CONFIG_SCHEDSTATS=y`.
+`struct sched_statistics` is only compiled in when the kernel is built with `CONFIG_SCHEDSTATS=y`. `/proc/<pid>/schedstat` fields 2 and 3 (`sched_info.run_delay` and `sched_info.pcount`) are gated by `CONFIG_SCHED_INFO`; if `sched_info_on()` returns false the file returns `0 0 0`. Verify: `grep CONFIG_SCHED_INFO /boot/config-$(uname -r)`. Typical production distro kernels (Debian bookworm, Ubuntu 22.04/24.04, RHEL 9, GKE nodes, EKS nodes) ship with both `CONFIG_SCHED_INFO=y` and `CONFIG_SCHEDSTATS=y`.
 
 The `sched_stat_wait` tracepoint in section 6 does not require `CONFIG_SCHEDSTATS` and works on any kernel with `CONFIG_TRACEPOINTS=y` (universal on modern distros). It is the preferred method for per-process scheduler latency measurement in production environments where kernel recompilation is not feasible.
