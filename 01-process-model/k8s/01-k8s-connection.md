@@ -17,7 +17,7 @@ layers: the Kubernetes control plane, kubelet, the CRI daemon (containerd), the 
 runtime (runc), and finally the Linux kernel. Each layer passes work downward until
 the kernel issues the `clone3()` call that brings the container into existence.
 
-### 1.1 kubelet watches the API server via inotify/epoll
+### 1.1 kubelet watches the API server via epoll (HTTP/2 watch connection)
 
 kubelet does not poll the API server. Instead it opens a long-lived HTTP/2 watch
 connection (a Watch on its assigned Node's Pods resource). Under the hood, the
@@ -193,19 +193,24 @@ pointer that happens to point to different namespace structs.
 
 ```
 systemd (pid 1)
-└─ kubelet (pid ~1200)
-   └─ containerd (pid ~1350)
-      └─ containerd-shim-runc-v2 (pid ~4100)   ← one per pod
-         └─ pause (pid ~4110)                    ← pod sandbox / PID 1 of pod namespace
-            ├─ nginx (pid ~4120)
-            └─ sidecar (pid ~4125)
+├─ kubelet (pid ~1200)
+├─ containerd (pid ~1350)
+└─ containerd-shim-runc-v2 (pid ~4100)   ← re-parents to systemd at startup
+   └─ pause (pid ~4110)
+      ├─ nginx (pid ~4120)                ← same PID namespace as pause
+      └─ sidecar (pid ~4125)              ← same PID namespace as pause
 ```
 
-Note: `nginx` and `sidecar` are shown as children of `pause` because they share
-`pause`'s PID namespace. From the host they are direct children of
-`containerd-shim-runc-v2` in the process tree (i.e., their `task_struct.real_parent`
-points to the shim), but `pstree` groups them visually under `pause` when displaying
-by PID namespace.
+Note: from the kernel's `real_parent` perspective, `nginx` and `sidecar` are children
+of the shim (not pause). The tree above shows the PID-namespace-grouped view that
+tools like `pstree --ns` display.
+
+The containerd-shim re-parents itself to systemd (PID 1) at startup — that is the
+entire point of the shim design: containerd can restart without orphaning containers.
+`nginx` and `sidecar` join `pause`'s PID namespace via `setns()`, so their
+`task_struct.nsproxy->pid_ns_for_children` points to pause's PID namespace, but their
+`task_struct.real_parent` points to the shim process. Use `pstree --ns` or `pstree -n`
+to see the namespace-grouped view shown above.
 
 ### 2.2 Commands to observe the pod process tree
 
@@ -597,10 +602,11 @@ kprobe:cgroup_attach_task {
 ```bash
 # Trace every execve, filter for container-related binaries
 bpftrace -e '
-tracepoint:syscalls:sys_enter_execve {
-    printf("execve: pid=%-6d comm=%-16s file=%s\n",
-        pid, comm, str(args->filename));
-} / str(args->filename) == "/pause" || str(args->filename) == "/usr/sbin/nginx" /'
+tracepoint:syscalls:sys_enter_execve
+/ str(args->filename) == "/pause" || str(args->filename) == "/usr/sbin/nginx" /
+{
+    printf("execve: comm=%s file=%s\n", comm, str(args->filename));
+}'
 ```
 
 ---
