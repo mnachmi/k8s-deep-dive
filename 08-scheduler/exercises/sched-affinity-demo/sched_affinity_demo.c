@@ -5,7 +5,7 @@
  * Demonstrates:
  *   a) Pinning the main process to CPU 0 with sched_setaffinity(2)
  *   b) Spawning two threads: one pinned to CPU 0, one pinned to CPU 1
- *   c) Reading /proc/self/status to verify Cpus_allowed_list
+ *   c) Reading /proc/<tid>/status to verify Cpus_allowed_list (uses SYS_gettid, not /proc/self)
  *   d) Printing nice-to-weight table for nice values -5 to +5
  *   e) Printing the current task's scheduling policy and priority
  *

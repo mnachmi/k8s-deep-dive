@@ -142,4 +142,4 @@ numastat -p nginx
 | `pick_next_task_rt()` | `kernel/sched/rt.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/rt.c |
 | `task_numa_fault()` | `kernel/sched/numa_balancing.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/numa_balancing.c |
 | `build_sched_domains()` | `kernel/sched/topology.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/topology.c |
-| `struct sched_domain` | `include/linux/sched/sd_flags.h` | https://elixir.bootlin.com/linux/v6.9/source/include/linux/sched/sd_flags.h |
+| `struct sched_domain` | `kernel/sched/sched.h` | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/sched.h |

@@ -24,7 +24,7 @@ var (
 	flagMounts     = flag.Bool("mounts", false, "Show mount namespace table and overlay layer count (requires --pod)")
 	flagNetNS      = flag.Bool("netns", false, "Show network namespace interface stats (requires --pod)")
 	flagEBPF       = flag.Bool("ebpf", false, "Show BPF objects (programs and maps) per pod (requires --pod)")
-	flagSched      = flag.Bool("sched", false, "Show CPU/NUMA affinity and cgroup cpu.weight/cpu.max for the pod")
+	flagSched      = flag.Bool("sched", false, "Show CPU/NUMA affinity and cgroup cpu.weight/cpu.max for the pod (requires --pod)")
 )
 
 func main() {
