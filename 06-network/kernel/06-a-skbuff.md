@@ -176,7 +176,7 @@ struct sk_buff
 3. **Stack traversal (up)**: Each layer calls `skb_pull()` to advance past its header and sets its header offset (`skb_reset_network_header()`, etc.).
 4. **Delivery**: TCP copies data from skb page fragments into the user buffer via `skb_copy_datagram_iter()` and then calls `kfree_skb()`.
 5. **Transmit (down)**: Each layer calls `skb_push()` to prepend its header. The qdisc holds the skb until the NIC is ready.
-6. **Free**: `kfree_skb()` decrements the data refcount. If zero, frees the data buffer. Releases `nfct` via `nf_conntrack_put()`, `_skb_refdst` via `dst_release()`, and the sk_buff struct itself back to the skb cache.
+6. **Free**: `kfree_skb()` decrements the data refcount. If zero, frees the data buffer. Releases the skb extension area (which holds the conntrack reference — `nf_ct_put()` is called from `skb_ext_put()` during teardown), `_skb_refdst` via `dst_release()`, and the sk_buff struct itself back to the skb cache.
 
 ---
 

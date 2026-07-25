@@ -199,8 +199,8 @@ socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)
                            └─ tcp_v4_init_sock()        # net/ipv4/tcp_ipv4.c
                                 └─ tcp_init_sock()
                                      ├─ tcp_init_xmit_timers()
-                                     ├─ skb_queue_head_init(&tp->out_of_order_queue)
-                                     └─ icsk->icsk_ca_ops = &tcp_init_congestion_ops
+                                     ├─ tp->out_of_order_queue = RB_ROOT_CACHED
+                                     └─ tcp_assign_congestion_control(sk)
   └─ sock_map_fd() → alloc struct file, install into fd table, return fd
 ```
 
@@ -208,7 +208,7 @@ Source: https://elixir.bootlin.com/linux/v6.9/source/net/socket.c
 
 The path has two distinct allocation steps. `sock_alloc()` allocates the `struct socket` (and its associated inode, since sockets are VFS objects). `sk_alloc()` allocates the protocol-specific `struct sock` — for TCP this is actually a `struct tcp_sock` allocated from `tcp_prot.slab`, a dedicated `kmem_cache` sized to `sizeof(struct tcp_sock)`. The slab allocator gives near-zero allocation cost for the common case of many short-lived connections.
 
-`tcp_init_sock()` initialises congestion control to the system default (via `tcp_init_congestion_ops`), sets up retransmit timers, and initialises the out-of-order queue. At this point the socket is fully usable but unbound — `sk_state = TCP_CLOSE`, no port assigned.
+`tcp_init_sock()` calls `tcp_assign_congestion_control(sk)` to set the congestion control algorithm to the per-namespace sysctl default (`net.ipv4.tcp_congestion_control`), sets up retransmit timers, and initialises the out-of-order queue as an `rb_root_cached` red-black tree (since Linux 5.1). At this point the socket is fully usable but unbound — `sk_state = TCP_CLOSE`, no port assigned.
 
 `sock_map_fd()` allocates a `struct file` (with `socket_file_ops` as its `f_op`), installs it into the process's file descriptor table, and returns the fd number. From userspace's perspective, the socket is now just a file descriptor.
 

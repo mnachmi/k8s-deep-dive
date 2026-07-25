@@ -12,7 +12,7 @@ import (
 
 // NetInterface holds per-interface counters from /proc/<pid>/net/dev.
 // Fields mirror the rx/tx columns in the kernel's seq_file output for
-// struct net_device — see net/core/net-procfs.c:dev_seq_show().
+// struct net_device — see net/core/net-procfs.c:dev_seq_printf_stats().
 type NetInterface struct {
 	Name      string
 	RxBytes   uint64

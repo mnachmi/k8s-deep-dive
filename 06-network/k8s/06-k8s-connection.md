@@ -59,7 +59,7 @@ A ClusterIP Service is a virtual IP that exists only in iptables (or IPVS) rules
 **Setup**: client pod IP `10.244.0.3`, Service ClusterIP `10.96.0.1:443`, backend pod IP `10.244.1.5:443`.
 
 1. **Client sends SYN** to `10.96.0.1:443`. The packet leaves the pod network namespace via `eth0` → veth → host bridge.
-2. **PREROUTING hook fires**. Conntrack sees a new flow and allocates a `struct nf_conn` entry; status = `IPS_NEW`.
+2. **PREROUTING hook fires**. Conntrack sees a new flow and allocates a `struct nf_conn` entry; the entry has no flags set yet (specifically, it lacks `IPS_CONFIRMED` until the packet actually leaves the box).
 3. **KUBE-SERVICES chain matches** the destination `10.96.0.1:443` and jumps to the per-Service chain `KUBE-SVC-<hash>`.
 4. **KUBE-SVC selects a backend** using `--probability` logic (1/N per rule). Suppose `KUBE-SEP-ABC` wins.
 5. **DNAT applied**: the iptables NAT hook rewrites the packet destination from `10.96.0.1:443` to `10.244.1.5:443`. Conntrack records the original tuple `(10.244.0.3:src_port → 10.96.0.1:443)` and reply tuple `(10.244.1.5:443 → 10.244.0.3:src_port)`; status gains `IPS_DST_NAT`.
