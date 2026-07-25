@@ -6,7 +6,8 @@
 |------|-------------|-----|
 | `include/linux/sched.h` | `struct sched_statistics` | https://elixir.bootlin.com/linux/v6.9/source/include/linux/sched.h |
 | `kernel/sched/stats.h` | `schedstat_*` macros, inline stat helpers | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/stats.h |
-| `kernel/sched/stats.c` | `/proc/schedstat`, `/proc/<pid>/schedstat` handlers | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/stats.c |
+| `kernel/sched/stats.c` | `/proc/schedstat` system-wide handler | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/stats.c |
+| `fs/proc/base.c` | `/proc/<pid>/schedstat` per-task handler (`proc_pid_schedstat`) | https://elixir.bootlin.com/linux/v6.9/source/fs/proc/base.c |
 | `kernel/sched/fair.c` | `update_curr()`, `cfs_rq->exec_clock`, CFS latency stats | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/fair.c |
 | `kernel/sched/fair.c` | `throttle_cfs_rq()`, `unthrottle_cfs_rq()`, `cfs_b->throttled_time` | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/fair.c |
 | `kernel/sched/cpufreq_schedutil.c` | `sugov_update_shared()` — cpufreq/scheduler interaction | https://elixir.bootlin.com/linux/v6.9/source/kernel/sched/cpufreq_schedutil.c |
