@@ -10,6 +10,7 @@ import (
 	"github.com/linux-to-k8s/kube-inspect/internal/cgroup"
 	"github.com/linux-to-k8s/kube-inspect/internal/ebpf"
 	"github.com/linux-to-k8s/kube-inspect/internal/kubelet"
+	"github.com/linux-to-k8s/kube-inspect/internal/metrics"
 	"github.com/linux-to-k8s/kube-inspect/internal/netns"
 	"github.com/linux-to-k8s/kube-inspect/internal/proc"
 	"github.com/linux-to-k8s/kube-inspect/internal/sched"
@@ -27,12 +28,13 @@ var (
 	flagEBPF       = flag.Bool("ebpf", false, "Show BPF objects (programs and maps) per pod (requires --pod)")
 	flagSched      = flag.Bool("sched", false, "Show CPU/NUMA affinity and cgroup cpu.weight/cpu.max for the pod (requires --pod)")
 	flagPressure   = flag.Bool("pressure", false, "Show node PSI and pod memory.events (requires --pod for pod events)")
+	flagPerf       = flag.Bool("perf", false, "Show CPU throttle stats and scheduler latency per process (requires --pod)")
 )
 
 func main() {
 	flag.Parse()
 	if *flagPod == "" && !*flagNode {
-		fmt.Fprintln(os.Stderr, "usage: kube-inspect --pod <uid> [--namespaces] [--cgroup] [--psi] [--mounts] [--netns] [--ebpf] [--sched] [--pressure] [--json]")
+		fmt.Fprintln(os.Stderr, "usage: kube-inspect --pod <uid> [--namespaces] [--cgroup] [--psi] [--mounts] [--netns] [--ebpf] [--sched] [--pressure] [--perf] [--json]")
 		os.Exit(1)
 	}
 
@@ -233,6 +235,37 @@ func main() {
 				fmt.Printf("  low=%d  high=%d  max=%d  oom=%d  oom_kill=%d\n",
 					ev.Low, ev.High, ev.Max, ev.OOM, ev.OOMKill)
 				fmt.Println()
+			}
+		}
+
+		if *flagPerf {
+			report, err := metrics.GetPodPerfReport(*flagPod)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "perf: %v\n", err)
+			} else {
+				t := report.Throttle
+				fmt.Printf("CPU throttle for pod %s:\n", report.PodUID)
+				fmt.Printf("  cgroup:         %s\n", t.CgPath)
+				fmt.Printf("  usage_usec:     %d\n", t.UsageUS)
+				fmt.Printf("  nr_periods:     %d\n", t.NrPeriods)
+				fmt.Printf("  nr_throttled:   %d\n", t.NrThrottled)
+				fmt.Printf("  throttled_usec: %d\n", t.ThrottledUS)
+				fmt.Printf("  throttle_ratio: %.1f%%\n", t.ThrottleRatio()*100)
+				fmt.Println()
+				if len(report.Processes) > 0 {
+					fmt.Printf("Scheduler latency (top processes by wait ratio):\n")
+					fmt.Printf("  %-8s %-16s %12s %12s %8s %10s\n",
+						"PID", "COMM", "RUNTIME_MS", "WAIT_MS", "WAIT%", "SWITCHES")
+					for _, p := range report.Processes {
+						fmt.Printf("  %-8d %-16s %12.1f %12.1f %7.1f%% %10d\n",
+							p.PID, p.Comm,
+							float64(p.RuntimeNS)/1e6,
+							float64(p.WaitNS)/1e6,
+							p.WaitRatio()*100,
+							p.NrSwitches)
+					}
+					fmt.Println()
+				}
 			}
 		}
 	}
