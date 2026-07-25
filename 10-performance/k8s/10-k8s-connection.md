@@ -80,7 +80,7 @@ Running `perf` inside a container requires satisfying all three kernel gates:
    - `2`: allow per-process profiling for non-root (old default)
    - `1`: allow kernel profiling for non-root
    - `≤ 0`: allow all, including hardware PMU
-3. **seccomp**: GKE's default seccomp profile (`RuntimeDefault`) blocks `perf_event_open` (syscall 298 on x86-64). Use a custom seccomp profile or `securityContext.seccompProfile.type: Unconfined` with `CAP_PERFMON` for a profiling DaemonSet.
+3. **seccomp**: RuntimeDefault seccomp profile (the default on GKE, EKS, AKS, and most managed clusters) blocks `perf_event_open` (syscall 298 on x86-64). Use a custom seccomp profile or `securityContext.seccompProfile.type: Unconfined` with `CAP_PERFMON` for a profiling DaemonSet.
 
 The `perf_event_open` syscall is defined in `kernel/events/core.c`. The capability check inside it is:
 
@@ -168,7 +168,7 @@ A `wait_ratio` above 10% for a non-IO-bound container process is a strong signal
 |---------|-----------------|------------|
 | Reduce CPU throttle | Shorter CFS period reduces max throttle gap | `--cpu-cfs-period=10000` (10ms) on kubelet |
 | Eliminate noisy neighbor | Dedicated cpuset via `cpuset.cpus` | CPU manager static policy + Guaranteed QoS |
-| Profile without privileges | `perf_event_paranoid=1` allows per-process perf | DaemonSet with `hostPID` + `CAP_PERFMON` |
+| Profile without privileges | `perf_event_paranoid≤2` allows per-process perf | DaemonSet with `hostPID` + `CAP_PERFMON` |
 | NUMA-local memory | `cpuset.mems` pins memory to local NUMA node | Topology Manager `single-numa-node` policy |
 | HugePages | THP + `hugetlbfs` reduces TLB miss rate | `resources.limits.hugepages-2Mi` in Pod spec |
 
@@ -178,7 +178,7 @@ https://elixir.bootlin.com/linux/v6.9/source/kernel/cgroup/cpuset.c
 
 **Topology Manager alignment:** for NUMA-sensitive workloads (ML inference, in-memory databases), `--topology-manager-policy=single-numa-node` ensures CPU, memory, and device (GPU/RDMA NIC) allocations all land on the same NUMA node. This avoids cross-socket cache miss storms that `PERF_COUNT_HW_CACHE_MISSES` reveals. Combine with `--memory-manager-policy=Static` so kubelet also pins `cpuset.mems`.
 
-**CFS burst (Linux 5.14+):** `cpu.max.burst` allows a cgroup to accumulate unused quota up to a burst ceiling, absorbing short CPU spikes without throttling. In K8s, this is exposed via the `cpuCFSBurst` feature gate (alpha in 1.27+). Use carefully: burst can cause latency spikes for neighboring workloads on shared nodes.
+**CFS burst (Linux 5.14+):** `cpu.max.burst` allows a cgroup to accumulate unused quota up to a burst ceiling, absorbing short CPU spikes without throttling. CFS burst support (kernel `cpu.max.burst`, Linux 5.14; check your Kubernetes version's feature gates for status). Use carefully: burst can cause latency spikes for neighboring workloads on shared nodes.
 
 ## 6. Common Failure Patterns
 
@@ -205,7 +205,7 @@ kubectl get node -o jsonpath='{.items[0].metadata.annotations.container\.seccomp
 kubectl get pod <name> -o jsonpath='{.spec.securityContext.seccompProfile}'
 ```
 
-On GKE, `perf_event_open` is blocked by the default seccomp profile even with `CAP_PERFMON`. The workaround is a custom seccomp profile that allows syscall 298 (`perf_event_open`), applied via `securityContext.seccompProfile.type: Localhost` with the profile JSON stored on the node.
+On clusters using the RuntimeDefault seccomp profile (the default on GKE, EKS, AKS, and most managed clusters), `perf_event_open` is blocked even with `CAP_PERFMON`. The workaround is a custom seccomp profile that allows syscall 298 (`perf_event_open`), applied via `securityContext.seccompProfile.type: Localhost` with the profile JSON stored on the node.
 
 ## 7. Verification Commands
 
@@ -219,6 +219,7 @@ for cg in /sys/fs/cgroup/kubepods.slice/kubepods-pod*.slice; do
 done
 
 # Throttle ratio per pod (requires nr_periods > 0)
+# NOTE: assumes default CFS period of 100ms (100000 µs); check cpu.max if period was changed
 for cg in /sys/fs/cgroup/kubepods.slice/kubepods-pod*.slice; do
   uid=$(basename $cg | sed 's/.*pod//' | cut -c1-8)
   awk -v cg="$uid" '
@@ -278,5 +279,5 @@ done | sort -rn | head -10
 
 - `struct sched_statistics` and `wait_sum` require `CONFIG_SCHEDSTATS=y`. GKE and EKS node kernels enable this by default.
 - `sched_info.run_delay` (field 2 of `/proc/<pid>/schedstat`) requires `CONFIG_SCHED_INFO=y`. Verify: `grep CONFIG_SCHED_INFO /boot/config-$(uname -r)`.
-- `perf_event_open` requires `CONFIG_PERF_EVENTS=y` (universally enabled on production kernels) and either `CAP_PERFMON` (Linux 5.8+) or `perf_event_paranoid ≤ 1`.
+- `perf_event_open` requires `CONFIG_PERF_EVENTS=y` (universally enabled on production kernels) and either `CAP_PERFMON` (Linux 5.8+) or `perf_event_paranoid ≤ 2 (for user-space only profiling) or ≤ 1 (for kernel profiling)`.
 - The `sched_stat_wait` tracepoint works on any kernel with `CONFIG_TRACEPOINTS=y` and does not require `CONFIG_SCHEDSTATS`. It is the preferred production method for per-process scheduler latency measurement.
