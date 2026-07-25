@@ -185,6 +185,9 @@ func printDeltaTable(pid int, prev, curr []NetInterface, elapsed time.Duration) 
 		if !ok {
 			p = NetInterface{}
 		}
+		// Counters are assumed monotonically increasing between samples.
+		// uint64 wrap-around (counter reset on interface removal/re-add) would
+		// produce a huge positive number; acceptable for a short-lived demo tool.
 		rxBps := float64(c.RxBytes-p.RxBytes) / secs
 		rxPps := float64(c.RxPackets-p.RxPackets) / secs
 		txBps := float64(c.TxBytes-p.TxBytes) / secs
