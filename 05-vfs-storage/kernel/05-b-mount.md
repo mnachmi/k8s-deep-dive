@@ -9,8 +9,8 @@ call path to the per-process mountinfo view that containers depend on.
 
 ## 1 — Source Locations
 
-| File | Purpose |
-|------|---------|
+| File | Purpose | Source |
+|------|---------|--------|
 | `fs/mount.h` | Internal `struct mount`, `struct mnt_namespace`, `struct mountpoint` — kernel-private, not exported to filesystems | https://elixir.bootlin.com/linux/v6.9/source/fs/mount.h |
 | `fs/namespace.c` | `sys_mount`, `do_mount`, `path_mount`, `do_new_mount`, `graft_tree`, namespace clone/unshare | https://elixir.bootlin.com/linux/v6.9/source/fs/namespace.c |
 | `include/linux/mount.h` | Public `struct vfsmount` — the only mount type filesystem code is allowed to see | https://elixir.bootlin.com/linux/v6.9/source/include/linux/mount.h |
@@ -51,12 +51,18 @@ struct mount {
     struct mount      *mnt_parent;       // parent mount
     struct dentry     *mnt_mountpoint;   // dentry in parent where this is attached
     struct vfsmount    mnt;              // embedded public struct (MUST use real_mount() to go back)
+    union {
+        struct rcu_head   mnt_rcu;       // for RCU-delayed freeing
+        struct llist_node mnt_llist;     // for lock-free batch freeing
+    };
     struct list_head   mnt_mounts;       // list head of child mounts
     struct list_head   mnt_child;        // link in parent's mnt_mounts list
     struct list_head   mnt_instance;     // sb->s_mounts — all mounts of same superblock
     const char        *mnt_devname;      // device name (e.g., "/dev/sda1", "overlay")
     struct mnt_namespace *mnt_ns;        // containing mount namespace
     struct mountpoint *mnt_mp;           // where this is mounted
+    struct hlist_node  mnt_mp_list;      // link in mnt_mp->m_list (all mounts at same point)
+    struct list_head   mnt_umounting;    // link during lazy umount processing
     struct list_head   mnt_list;         // namespace's list of all mounts
     int                mnt_id;           // unique mount ID (shown in /proc/pid/mountinfo)
     int                mnt_group_id;     // peer group for shared mounts
