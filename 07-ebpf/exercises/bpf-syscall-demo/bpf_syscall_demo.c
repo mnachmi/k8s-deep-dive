@@ -166,7 +166,7 @@ static int create_map(void)
  *   insn  4     : r2 += -4            (r2 = &key on stack)
  *   insn  5     : *(u32 *)(r10-4) = 0 (key = 0)
  *   insn  6     : call map_lookup_elem(r1=map, r2=&key)
- *   insn  7     : if r0 == 0, skip 5  (NULL check — jump to accept)
+ *   insn  7     : if r0 == 0, skip 5  (NULL check — jump to EXIT with r0=0, SK_DROP; unreachable for ARRAY)
  *   insn  8     : r1 = r0             (r1 = value pointer)
  *   insn  9     : r2 = *(u64 *)(r1+0) (load current counter)
  *   insn 10     : r2 += 1             (increment)
@@ -196,7 +196,7 @@ static int load_prog(int map_fd)
         /* insn 6: r0 = map_lookup_elem(map, &key) */
         BPF_EMIT_CALL(BPF_FUNC_map_lookup_elem),
 
-        /* insn 7: if r0 == NULL skip 5 insns -> insn 13 (r0=1 + exit) */
+        /* insn 7: if r0 == NULL skip 5 insns -> insn 13 (EXIT, r0=0 = SK_DROP; unreachable for ARRAY) */
         BPF_JMP_IMM(BPF_JEQ, BPF_REG_0, 0, 5),
 
         /* insn 8: r1 = value pointer */

@@ -93,8 +93,9 @@ insn  6       BPF_EMIT_CALL(BPF_FUNC_map_lookup_elem)
               Returns a pointer to the value slot, or NULL if not found.
 
 insn  7       BPF_JMP_IMM(JEQ, r0, 0, 5)
-              NULL guard: if the pointer is NULL (should not happen for
-              a pre-allocated ARRAY), jump past the increment to insn 13.
+              NULL guard: if the pointer is NULL (unreachable for a
+              pre-allocated ARRAY), jump to insn 13, exiting with r0=0
+              (SK_DROP). insn 12 (SK_PASS) is skipped.
 
 insn  8       BPF_MOV64_REG(r1, r0)
               r1 = value pointer (scratch r0 is about to be overwritten).

@@ -158,7 +158,7 @@ Per-CPU variants (`BPF_MAP_TYPE_PERCPU_ARRAY`) store `nr_cpus` copies of each va
 
 ## 5. `BPF_MAP_TYPE_RINGBUF` — Event Streaming
 
-The ring buffer map was introduced in Linux 5.8 as a high-throughput, low-overhead replacement for `BPF_MAP_TYPE_PERF_EVENT_ARRAY`. It supports multiple producers (BPF programs running on any CPU) and a single consumer (userspace polling via `ring_buffer__poll()` from libbpf). The `struct bpf_ringbuf` contains a `spinlock_t` that serializes concurrent producers in `bpf_ringbuf_reserve` before the `cmpxchg` that claims the slot; the consumer path reads `consumer_pos` without a lock.
+The ring buffer map was introduced in Linux 5.8 as a high-throughput, low-overhead replacement for `BPF_MAP_TYPE_PERF_EVENT_ARRAY`. It supports multiple producers (BPF programs running on any CPU) and a single consumer (userspace polling via `ring_buffer__poll()` from libbpf). The `struct bpf_ringbuf` contains a `spinlock_t` that serializes concurrent producers in `bpf_ringbuf_reserve` via `spin_lock_irqsave()`; the consumer path reads `consumer_pos` without a lock.
 
 ### `struct bpf_ringbuf`
 
@@ -185,10 +185,10 @@ struct bpf_ringbuf {
 
 The producer path (`bpf_ringbuf_reserve`):
 
-1. Reads the current `producer_pos`.
-2. Checks that `producer_pos - consumer_pos < mask + 1` (ring not full).
-3. Atomically claims a slot with `cmpxchg(&ringbuf->producer_pos, old_pos, new_pos)`. If the cmpxchg fails (another CPU raced), it retries.
-4. Writes the record header (length + flags) into `data[old_pos & mask]`.
+1. Acquires `spinlock_t` with `spin_lock_irqsave()` (or `spin_trylock_irqsave()` from NMI context).
+2. Checks that `producer_pos - consumer_pos < mask + 1` (ring not full). Returns `NULL` if full, then releases the lock.
+3. Advances `producer_pos` by `round_up(size + BPF_RINGBUF_HDR_SZ, 8)` to claim the slot, then releases the lock with `spin_unlock_irqrestore()`.
+4. Writes the record header (length + `BPF_RINGBUF_BUSY_BIT`) into `data[old_pos & mask]`.
 5. Returns a pointer to the record body for the BPF program to fill.
 
 `bpf_ringbuf_submit` marks the record header as committed (clears the `BPF_RINGBUF_BUSY_BIT`) and wakes `waitq` via `irq_work` to notify the consumer.
