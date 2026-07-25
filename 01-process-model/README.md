@@ -109,7 +109,7 @@ After completing the exercises, run:
 
 ```bash
 cd kube-inspect
-go run ./cmd/kube-inspect pods
+go run ./cmd/kube-inspect --node
 ```
 
 Expected output will list each running pod with its container processes, their PIDs

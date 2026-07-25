@@ -34,8 +34,8 @@ Each chapter is self-contained. Start with Chapter 00, then proceed in order.
 
 | # | Title | Kernel Anchor | K8s Focus | Status |
 |---|-------|---------------|-----------|--------|
-| 00 | Prologue: The Gap | syscall table, `entry_SYSCALL_64` | Why k8s is "just Linux" | coming soon |
-| 01 | Process Model | `task_struct`, `clone()`, `do_fork()` | Pod lifecycle, PID ns, PID 1 | coming soon |
+| 00 | Prologue: The Gap | syscall table, `entry_SYSCALL_64` | Why k8s is "just Linux" | ✅ complete |
+| 01 | Process Model | `task_struct`, `clone()`, `kernel_clone()` | Pod lifecycle, PID ns, PID 1 | ✅ complete |
 | 02 | Namespaces | `nsproxy`, 8 ns types, `setns()` | containerd/runc isolation | coming soon |
 | 03 | cgroups v2 | `css_set`, `cgroup_subsys`, controllers | kubelet QoS classes, resource limits | coming soon |
 | 04 | Memory | page tables, PSI, OOM killer, NUMA | Eviction manager, HugePages, Topology Manager | coming soon |

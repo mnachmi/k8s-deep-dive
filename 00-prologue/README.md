@@ -112,7 +112,7 @@ After reading this chapter, run the tool and observe the no-op output:
 ```bash
 cd kube-inspect
 go run ./cmd/kube-inspect --help
-go run ./cmd/kube-inspect pods
+go run ./cmd/kube-inspect --node
 ```
 
 The output is empty placeholders for now. By Chapter 07 those placeholders will be
