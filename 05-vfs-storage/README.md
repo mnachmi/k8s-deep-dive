@@ -51,7 +51,7 @@ Work through the files in this order. Each document builds on the previous.
 | `kernel/05-a-vfs.md` | `super_block`, `inode`, `dentry`, `file`, and the `open(2)` call path through VFS |
 | `kernel/05-b-mount.md` | `vfsmount`, `mount`, `mnt_namespace`; bind mounts, propagation, `mountinfo` parsing |
 | `kernel/05-c-overlayfs.md` | OverlayFS internals: upper/lower/work layers, copy-up, whiteouts, redirect dir |
-| `kernel/05-d-block-io.md` | Block layer: `bio`, request queues, `blk-mq`, io_uring, direct I/O vs page cache |
+| `kernel/05-d-block-io.md` | Block layer: `bio`, request queues, `blk-mq`, writeback |
 | `k8s/05-k8s-connection.md` | How kubelet maps Kubernetes volume types to kernel mount operations |
-| `exercises/inotify-demo/` | Go program using `inotify(7)` to watch filesystem events; trace `fsnotify` in kernel |
+| `exercises/inotify-demo/` | C program using `inotify(7)` to watch filesystem events; trace `fsnotify` in kernel |
 | `exercises/mount-inspector/` | Go tool that reads `/proc/<pid>/mountinfo` and renders the mount tree with propagation |

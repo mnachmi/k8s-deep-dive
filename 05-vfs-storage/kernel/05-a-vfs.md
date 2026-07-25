@@ -10,8 +10,8 @@ The Virtual Filesystem Switch is the kernel subsystem that makes every filesyste
 |------|------|----------|
 | `include/linux/fs.h` | https://elixir.bootlin.com/linux/v6.9/source/include/linux/fs.h | `struct super_block`, `struct inode`, `struct file`; all VFS vtable definitions |
 | `include/linux/dcache.h` | https://elixir.bootlin.com/linux/v6.9/source/include/linux/dcache.h | `struct dentry`, `struct dentry_operations`, dentry cache API |
-| `fs/namei.c` | https://elixir.bootlin.com/linux/v6.9/source/fs/namei.c | `path_openat()`, `link_path_walk()`, `walk_component()`, `lookup_fast()`, `lookup_slow()` |
-| `fs/open.c` | https://elixir.bootlin.com/linux/v6.9/source/fs/open.c | `do_sys_openat2()`, `do_filp_open()`, `vfs_open()`, `do_dentry_open()` |
+| `fs/namei.c` | https://elixir.bootlin.com/linux/v6.9/source/fs/namei.c | `path_openat()`, `link_path_walk()`, `walk_component()`, `lookup_fast()`, `lookup_slow()`, `do_filp_open()` |
+| `fs/open.c` | https://elixir.bootlin.com/linux/v6.9/source/fs/open.c | `do_sys_openat2()`, `vfs_open()`, `do_dentry_open()` |
 | `fs/dcache.c` | https://elixir.bootlin.com/linux/v6.9/source/fs/dcache.c | Dentry cache: allocation, hashing, LRU eviction, `d_lookup()`, `d_add()` |
 | `fs/inode.c` | https://elixir.bootlin.com/linux/v6.9/source/fs/inode.c | Inode lifecycle: `alloc_inode()`, `iput()`, `inode_init_always()`, inode LRU |
 
@@ -89,9 +89,9 @@ Source: https://elixir.bootlin.com/linux/v6.9/source/include/linux/fs.h
 | `0xEF53` | `61267` | ext4 (and ext2/ext3 — they share the magic) |
 | `0x58465342` | `1481003842` | XFS |
 | `0x01021994` | `16914836` | tmpfs / shmem |
-| `0x794C7630` | `2035054384` | OverlayFS |
+| `0x794C7630` | `2035054128` | OverlayFS |
 | `0x9FA0` | `40864` | procfs |
-| `0x62656572` | `1650812531` | sysfs (kernfs) |
+| `0x62656572` | `1650812274` | sysfs (kernfs) |
 
 **`s_root`** — The dentry of the filesystem's root directory. Every path walk that enters this filesystem starts here. When the kernel mounts a filesystem on top of `/mnt`, it links `s_root` into the mount's `mnt_root` pointer; path resolution crosses the mount boundary using `follow_mount()`.
 
@@ -129,9 +129,9 @@ struct inode {
     };
     dev_t                        i_rdev;         // device number (for S_IFCHR / S_IFBLK files)
     loff_t                       i_size;         // file size in bytes
-    struct timespec64            i_atime;        // last access time
-    struct timespec64            i_mtime;        // last data-modification time
-    struct timespec64            i_ctime;        // last status-change time (metadata)
+    struct timespec64            __i_atime;      // last access time   (use inode_get_atime())
+    struct timespec64            __i_mtime;      // last modification time (use inode_set_mtime_to_ts())
+    struct timespec64            __i_ctime;      // last change time   (use inode_get_ctime())
     spinlock_t                   i_lock;         // protects i_state, i_nlink, i_size changes
     unsigned short               i_bytes;        // bytes in the last allocated block
     u8                           i_blkbits;      // block size = 1 << i_blkbits
@@ -198,6 +198,10 @@ Helper macros `S_ISREG(m)`, `S_ISDIR(m)`, `S_ISLNK(m)` etc. test these bits. The
 Every directory entry pointing to an inode increments `i_nlink`. Creating a file sets `i_nlink = 1`. `ln file hardlink` increments it to 2. `unlink()` decrements it. A file's data is freed only when two conditions are simultaneously true: `i_nlink == 0` (no directory entries remain) AND `i_count == 0` (no open file descriptions hold a reference). This is why you can `unlink()` a file while it is open: the data persists until the last `close()`. Containers exploit this: runtime scratch files are often opened and immediately unlinked to ensure cleanup on crash.
 
 **`i_size`** — The logical size of the file in bytes, as reported by `stat(2)`. For sparse files, `i_size` can be much larger than the actual disk space consumed. For directories on most filesystems, `i_size` is the number of bytes consumed by directory entries. For symbolic links, `i_size` is the length of the link target string.
+
+**`__i_atime`, `__i_mtime`, `__i_ctime` — Timestamps (Linux 6.6+)**
+
+The three POSIX timestamps. The raw fields are private in Linux 6.6+ (renamed `__i_atime`, `__i_mtime`, `__i_ctime`); use `inode_get_atime()`, `inode_get_mtime()`, and `inode_get_ctime()` to read them; use `inode_set_atime_to_ts()`, `inode_set_mtime_to_ts()`, `inode_set_ctime_to_ts()` to write them. `__i_atime` is updated on every read (unless `MS_NOATIME` or `S_NOATIME` suppresses it). `__i_mtime` is updated when file data changes. `__i_ctime` is updated when any inode metadata changes (permissions, ownership, link count, data).
 
 **`i_mapping`** — Pointer to the `address_space` that manages the page cache for this inode's data. For regular files, this points to `i_data` (the embedded `address_space`). The `address_space` holds an `xarray` (`i_pages`) of cached pages indexed by page offset. `read()`, `mmap()`, and page faults all go through `i_mapping`. The `address_space_operations` vtable (`a_ops`) provides `readpage()`, `writepage()`, and `write_begin()/write_end()` for the filesystem to fill and flush cache pages.
 
@@ -502,9 +506,9 @@ tracepoint:syscalls:sys_exit_openat
 
 # Count inode lookup() calls per filesystem type (dcache misses that hit disk)
 bpftrace -e 'kprobe:lookup_slow {
-    $dentry = (struct dentry *)arg1;
+    $qs = (struct qstr *)arg0;
     printf("lookup_slow: comm=%-16s name=%s\n",
-           comm, str($dentry->d_name.name));
+           comm, str($qs->name));
 }'
 ```
 

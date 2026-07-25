@@ -31,7 +31,7 @@ struct vfsmount {
     struct dentry *mnt_root;           // root dentry of the mounted filesystem
     struct super_block *mnt_sb;        // superblock of the mounted filesystem
     int mnt_flags;                     // MNT_NOSUID, MNT_NODEV, MNT_NOEXEC, MNT_READONLY...
-    struct user_namespace *mnt_userns; // user namespace for uid/gid mapping
+    struct mnt_idmap *mnt_idmap;       // idmapping for uid/gid translation (since Linux 6.3)
 };
 ```
 

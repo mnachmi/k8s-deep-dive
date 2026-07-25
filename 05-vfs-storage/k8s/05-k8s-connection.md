@@ -39,7 +39,7 @@ When `containerd` pulls an image and starts a container, it assembles the image 
         workdir=<container-work> \
      <merged-rootfs>
    ```
-   The kernel's `ovl_mount()` validates the directory stack and returns a merged view.
+   The kernel's `ovl_get_tree()` validates the directory stack and returns a merged view.
 
 5. **Container process root**: runc creates a new mount namespace, bind-mounts `<merged-rootfs>` as `/`, then calls `pivot_root(2)` (or `chroot(2)`) to make it the container's root filesystem.
 

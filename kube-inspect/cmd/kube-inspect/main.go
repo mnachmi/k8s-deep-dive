@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/linux-to-k8s/kube-inspect/internal/cgroup"
 	"github.com/linux-to-k8s/kube-inspect/internal/proc"
@@ -118,10 +119,14 @@ func main() {
 					fmt.Printf("  %-6d  %-6d  %-11s %-20s %s\n",
 						m.MountID, m.ParentID, m.FSType, m.Source, m.MountPoint)
 					if m.FSType == "overlay" && m.MountPoint == "/" {
-						layers, lerr := proc.CountOverlayLayers(*flagPod)
-						if lerr != nil {
-							fmt.Fprintf(os.Stderr, "overlay layers error: %v\n", lerr)
-						} else {
+						layers := 0
+						for _, opt := range strings.Split(m.SuperOpts, ",") {
+							if strings.HasPrefix(opt, "lowerdir=") {
+								val := strings.TrimPrefix(opt, "lowerdir=")
+								layers = strings.Count(val, ":") + 1
+							}
+						}
+						if layers > 0 {
 							fmt.Printf("    overlay layers: %d\n", layers)
 						}
 					}
