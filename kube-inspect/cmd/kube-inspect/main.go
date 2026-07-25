@@ -9,6 +9,7 @@ import (
 
 	"github.com/linux-to-k8s/kube-inspect/internal/cgroup"
 	"github.com/linux-to-k8s/kube-inspect/internal/ebpf"
+	"github.com/linux-to-k8s/kube-inspect/internal/kubelet"
 	"github.com/linux-to-k8s/kube-inspect/internal/netns"
 	"github.com/linux-to-k8s/kube-inspect/internal/proc"
 	"github.com/linux-to-k8s/kube-inspect/internal/sched"
@@ -25,12 +26,13 @@ var (
 	flagNetNS      = flag.Bool("netns", false, "Show network namespace interface stats (requires --pod)")
 	flagEBPF       = flag.Bool("ebpf", false, "Show BPF objects (programs and maps) per pod (requires --pod)")
 	flagSched      = flag.Bool("sched", false, "Show CPU/NUMA affinity and cgroup cpu.weight/cpu.max for the pod (requires --pod)")
+	flagPressure   = flag.Bool("pressure", false, "Show node PSI and pod memory.events (requires --pod for pod events)")
 )
 
 func main() {
 	flag.Parse()
 	if *flagPod == "" && !*flagNode {
-		fmt.Fprintln(os.Stderr, "usage: kube-inspect --pod <uid> [--namespaces] [--cgroup] [--psi] [--mounts] [--netns] [--ebpf] [--sched] [--json]")
+		fmt.Fprintln(os.Stderr, "usage: kube-inspect --pod <uid> [--namespaces] [--cgroup] [--psi] [--mounts] [--netns] [--ebpf] [--sched] [--pressure] [--json]")
 		os.Exit(1)
 	}
 
@@ -208,6 +210,28 @@ func main() {
 							pa.PID, pa.Comm, pa.CpusAllowedList, pa.MemsAllowedList)
 					}
 				}
+				fmt.Println()
+			}
+		}
+
+		if *flagPressure {
+			np, err := kubelet.GetNodePressure()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "pressure: %v\n", err)
+			} else {
+				fmt.Printf("Node pressure (PSI avg10):\n")
+				fmt.Printf("  memory some=%.2f%%  full=%.2f%%\n", np.MemorySomeAvg10, np.MemoryFullAvg10)
+				fmt.Printf("  cpu    some=%.2f%%\n", np.CPUSomeAvg10)
+				fmt.Printf("  io     some=%.2f%%  full=%.2f%%\n", np.IOSomeAvg10, np.IOFullAvg10)
+				fmt.Println()
+			}
+			ev, err := kubelet.GetPodMemEvents(*flagPod)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "pod memory events: %v\n", err)
+			} else {
+				fmt.Printf("Pod %s memory.events:\n", ev.PodUID)
+				fmt.Printf("  low=%d  high=%d  max=%d  oom=%d  oom_kill=%d\n",
+					ev.Low, ev.High, ev.Max, ev.OOM, ev.OOMKill)
 				fmt.Println()
 			}
 		}

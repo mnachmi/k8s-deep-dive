@@ -13,6 +13,6 @@ Each chapter adds capabilities to this tool.
 | 06 | Network ns interface stats | internal/netns | done |
 | 07 | eBPF objects per pod | internal/ebpf | done |
 | 08 | CPU affinity + NUMA placement | internal/sched | done |
-| 09 | Node pressure + eviction thresholds | internal/kubelet | pending |
+| 09 | Node pressure + eviction thresholds | internal/kubelet | done |
 | 10 | Full perf report — complete tool | internal/metrics | pending |
 | 11 | Cluster health + kernel version audit | internal/ | pending |
