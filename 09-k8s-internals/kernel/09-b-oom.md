@@ -51,7 +51,7 @@ long oom_badness(struct task_struct *p, unsigned long totalpages)
     //    adj = oom_score_adj * totalpages / 1000
     adj = (long)p->signal->oom_score_adj * totalpages / 1000;
 
-    // 4. Return adjusted score (minimum 1 so no zero-score processes are skipped)
+    // 4. Return adjusted score; select_bad_process() keeps the running maximum
     return points + adj;
 }
 ```
@@ -62,10 +62,9 @@ long oom_badness(struct task_struct *p, unsigned long totalpages)
 ## 4. `oom_kill_process()`
 
 After selecting the victim, `oom_kill_process()`:
-1. Sends `SIGKILL` to the victim task and all tasks sharing its mm (threads).
-2. If the victim is a process group leader, also kills tasks in the same process group.
-3. Calls `mark_oom_victim(p)` which sets `TIF_MEMDIE` on the task — giving it access to memory reserves to exit quickly.
-4. Calls `wake_oom_reaper()` which wakes a dedicated kernel thread (`oom_reaper`) to asynchronously free the victim's anonymous memory without waiting for the victim to schedule.
+1. Sends `SIGKILL` to the victim task and all tasks sharing its mm (threads sharing memory via `for_each_process`/`for_each_thread` over `mm_users`).
+2. Calls `mark_oom_victim(p)` which sets `TIF_MEMDIE` on the task — giving it access to memory reserves to exit quickly.
+3. Calls `wake_oom_reaper()` which wakes a dedicated kernel thread (`oom_reaper`) to asynchronously free the victim's anonymous memory without waiting for the victim to schedule.
 
 ## 5. cgroup OOM — `memory.events`
 
