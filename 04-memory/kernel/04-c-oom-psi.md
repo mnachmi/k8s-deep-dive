@@ -267,9 +267,11 @@ cat $POD_CG/io.pressure
 # OOM events for a pod (oom = limit hit, oom_kill = process killed):
 cat $POD_CG/memory.events
 
-# bpftrace: trace OOM kills — show victim pid and comm at the moment of kill
-bpftrace -e 'kprobe:oom_kill_process {
-    $task = (struct task_struct *)arg1;
+# bpftrace: trace OOM kills — __oom_kill_process(victim, message) where arg0 is task_struct*
+# Note: probe __oom_kill_process, not oom_kill_process — the outer function receives
+# struct oom_control* (arg0) and const char* (arg1); the task is inside oc->chosen.
+bpftrace -e 'kprobe:__oom_kill_process {
+    $task = (struct task_struct *)arg0;
     printf("OOM kill: pid=%d comm=%s\n", $task->pid, $task->comm);
 }'
 
@@ -313,8 +315,9 @@ When `dmesg` shows repeated OOM kill lines, cross-reference with `memory.events`
 
 | Symbol | File | Link | Purpose |
 |--------|------|------|---------|
-| `out_of_memory()` | `mm/oom_kill.c` | [link](https://elixir.bootlin.com/linux/v6.9/source/mm/oom_kill.c) | OOM killer entry point — selects victim and triggers kill |
-| `oom_kill_process()` | `mm/oom_kill.c` | [link](https://elixir.bootlin.com/linux/v6.9/source/mm/oom_kill.c) | Sets `MMF_OOM_VICTIM`, delivers SIGKILL, wakes OOM reaper |
-| `oom_badness()` | `mm/oom_kill.c` | [link](https://elixir.bootlin.com/linux/v6.9/source/mm/oom_kill.c) | Computes per-process OOM score (0–1000) factoring RSS and `oom_score_adj` |
-| `struct psi_group` | `include/linux/psi_types.h` | [link](https://elixir.bootlin.com/linux/v6.9/source/include/linux/psi_types.h) | Per-cgroup PSI accounting state — averages, totals, poll triggers |
-| `enum psi_task_count` | `include/linux/psi_types.h` | [link](https://elixir.bootlin.com/linux/v6.9/source/include/linux/psi_types.h) | Task state categories tracked by PSI on each context switch |
+| `out_of_memory()` | `mm/oom_kill.c` | https://elixir.bootlin.com/linux/v6.9/source/mm/oom_kill.c | OOM killer entry point — selects victim and triggers kill |
+| `oom_kill_process()` | `mm/oom_kill.c` | https://elixir.bootlin.com/linux/v6.9/source/mm/oom_kill.c | Sets `MMF_OOM_VICTIM`, delivers SIGKILL, wakes OOM reaper |
+| `oom_badness()` | `mm/oom_kill.c` | https://elixir.bootlin.com/linux/v6.9/source/mm/oom_kill.c | Computes per-process OOM score (0–1000) factoring RSS and `oom_score_adj` |
+| `select_bad_process()` | `mm/oom_kill.c` | https://elixir.bootlin.com/linux/v6.9/source/mm/oom_kill.c | Iterates all processes, calls `oom_badness()`, picks the highest-scoring victim |
+| `struct psi_group` | `include/linux/psi_types.h` | https://elixir.bootlin.com/linux/v6.9/source/include/linux/psi_types.h | Per-cgroup PSI accounting state — averages, totals, poll triggers |
+| `enum psi_task_count` | `include/linux/psi_types.h` | https://elixir.bootlin.com/linux/v6.9/source/include/linux/psi_types.h | Task state categories tracked by PSI on each context switch |
