@@ -9,7 +9,7 @@
 | CPU pinning (static policy) | `cpuset.cpus` (cgroup cpuset) | `/sys/fs/cgroup/.../cpuset.cpus` |
 | NUMA affinity | `cpuset.mems` (cgroup cpuset) | `/sys/fs/cgroup/.../cpuset.mems` |
 | QoS Guaranteed | highest `cpu.weight` (10000) + static cpuset eligible | kubelet CPU manager |
-| QoS BestEffort | lowest `cpu.weight` (1) | kubelet CPU manager |
+| QoS BestEffort | lowest `cpu.weight` (2) | kubelet CPU manager |
 
 ## 2. CPU Requests → `cpu.weight`
 
