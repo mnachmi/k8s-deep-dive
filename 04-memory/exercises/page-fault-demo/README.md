@@ -25,18 +25,18 @@ No root required. Runs on any Linux with `/proc` mounted (standard everywhere).
 Allocation size: 64 MiB
 
 [1] malloc 64 MiB (no touch)
-  after malloc (no touch)                 faults=3       RSS delta=0 KiB
+  after malloc (no touch)                 faults=3       RSS delta=68 KiB
 [2] touch all pages (memset)
-  after memset (all pages touched)        faults=16385   RSS delta=65536 KiB
+  after memset (all pages touched)        faults=16384   RSS delta=65536 KiB
 [3] mmap(MAP_ANONYMOUS) 64 MiB + touch
   after mmap anon + touch                 faults=16384   RSS delta=65536 KiB
 [4] mmap + MADV_HUGEPAGE (THP hint) + touch
   after mmap + MADV_HUGEPAGE + touch      faults=16384   RSS delta=65536 KiB
 [5] mmap + touch + MADV_DONTNEED (release pages) + re-touch
-  RSS after touch:         327168 KiB
-  RSS after MADV_DONTNEED: 261632 KiB
+  RSS after touch:         67272 KiB
+  RSS after MADV_DONTNEED: 1736 KiB
   Pages released: ~65536 KiB
-  re-touch after MADV_DONTNEED           faults=16384   RSS delta=65536 KiB
+  re-touch after MADV_DONTNEED            faults=16384   RSS delta=65536 KiB
 
 Note: minor faults = demand paging from RAM (zero-fill, CoW)
       major faults = disk reads (swap-in, file read)

@@ -4,16 +4,19 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/mman.h>
-#include <sys/resource.h>
 
 #define MB  (1024UL * 1024UL)
 #define ALLOC_SIZE (64 * MB)
 
 static long get_rss_kb(void)
 {
-    struct rusage ru;
-    if (getrusage(RUSAGE_SELF, &ru) < 0) return -1;
-    return ru.ru_maxrss;
+    FILE *f = fopen("/proc/self/statm", "r");
+    if (!f) return -1;
+    long dummy = 0, pages = 0;
+    /* field 2: resident set size in pages */
+    (void)fscanf(f, "%ld %ld", &dummy, &pages);
+    fclose(f);
+    return pages * (sysconf(_SC_PAGESIZE) / 1024);
 }
 
 static long get_minor_faults(void)
