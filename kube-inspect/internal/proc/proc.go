@@ -117,3 +117,48 @@ func NsSymlinks(pid int) (map[string]string, error) {
 	}
 	return result, nil
 }
+
+// NsInfo holds the namespace identifiers for one process in a pod.
+// The NS map keys are namespace types ("net", "mnt", "pid", etc.) and
+// values are inode numbers from /proc/<pid>/ns/.
+// Processes with the same inode for a given type share that namespace instance.
+// See include/linux/ns_common.h:struct ns_common for the kernel side.
+type NsInfo struct {
+	PID  int               `json:"pid"`
+	Comm string            `json:"comm"`
+	NS   map[string]uint64 `json:"ns"`
+}
+
+// podNsTypes is the set of namespace types inspected per pod process.
+var podNsTypes = []string{"cgroup", "ipc", "mnt", "net", "pid", "user", "uts"}
+
+func readNsInode(pid int, nstype string) uint64 {
+	var st syscall.Stat_t
+	if err := syscall.Stat(fmt.Sprintf("/proc/%d/ns/%s", pid, nstype), &st); err != nil {
+		return 0
+	}
+	return st.Ino
+}
+
+// ListPodNamespaces returns per-process namespace info for all processes
+// belonging to the given pod UID (matched via cgroup v2 path).
+// It builds on ListPodProcesses and adds namespace inode data per process.
+func ListPodNamespaces(podUID string) ([]NsInfo, error) {
+	procs, err := ListPodProcesses(podUID)
+	if err != nil {
+		return nil, fmt.Errorf("listing pod processes: %w", err)
+	}
+	result := make([]NsInfo, 0, len(procs))
+	for _, p := range procs {
+		ns := make(map[string]uint64, len(podNsTypes))
+		for _, t := range podNsTypes {
+			ns[t] = readNsInode(p.PID, t)
+		}
+		result = append(result, NsInfo{
+			PID:  p.PID,
+			Comm: p.Comm,
+			NS:   ns,
+		})
+	}
+	return result, nil
+}
