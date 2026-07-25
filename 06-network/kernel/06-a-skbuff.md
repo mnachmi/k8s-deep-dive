@@ -45,14 +45,18 @@ struct sk_buff {
     __u8                 pkt_type;      // PACKET_HOST, PACKET_BROADCAST, PACKET_MULTICAST, PACKET_OTHERHOST
     __be16               protocol;      // ETH_P_IP, ETH_P_IPV6, ETH_P_ARP...
 
-    /* Routing and NAT */
+    /* Routing and conntrack */
     struct dst_entry    *_skb_refdst;   // routing destination (dst cache entry)
-    struct nf_conntrack *nfct;          // netfilter conntrack entry (NULL if not tracked)
+    // NOTE: nfct was removed from sk_buff in Linux 5.18.
+    // Conntrack info is now accessed via skb_ext: nf_ct_get(skb, &ctinfo)
     __u32                mark;          // packet mark (used by iptables -m mark, routing policy)
 
-    /* Fragment list for non-linear packets */
-    skb_frag_t           frags[MAX_SKB_FRAGS]; // page fragments for large I/O (scatter-gather)
-    struct sk_buff      *frag_list;     // list of sk_buffs for oversized packets
+    /* Non-linear (paged) data lives in struct skb_shared_info appended
+     * after the linear buffer — accessed via skb_shinfo(skb):
+     *   skb_shinfo(skb)->frags[MAX_SKB_FRAGS]  page fragments for scatter-gather DMA
+     *   skb_shinfo(skb)->frag_list             chain of sk_buffs for very large packets
+     * skb_shinfo(skb) = (struct skb_shared_info *)(skb->head + skb->end)
+     */
 
     /* Timestamps */
     ktime_t              tstamp;        // receive timestamp (set by net_timestamp_check)
@@ -139,9 +143,15 @@ Because data pages are shared, a clone must not modify the data that falls withi
 
 The reference count on the data buffer is stored in `skb_shinfo(skb)->dataref`. When the last sk_buff referencing a data buffer is freed, the buffer itself is released.
 
-### `nfct` — Conntrack Pointer
+### Conntrack Association
 
-`nfct` (https://elixir.bootlin.com/linux/v6.9/source/include/linux/skbuff.h) points to the `nf_conntrack` entry for this packet. The conntrack module (`net/netfilter/nf_conntrack_core.c`) sets this pointer in the `NF_INET_PRE_ROUTING` hook when it creates or looks up a connection tracking entry. The entry records the original and reply tuples (src/dst IP, src/dst port, protocol) so that NAT translations applied to the forward direction can be reversed automatically on reply packets.
+As of Linux 5.18, conntrack information is no longer stored as a direct `nfct` pointer in `struct sk_buff`. Instead it is stored in the skb extension area (`skb_ext`) and accessed via:
+```c
+struct nf_conn *ct = nf_ct_get(skb, &ctinfo);
+```
+Source: https://elixir.bootlin.com/linux/v6.9/source/include/net/netfilter/nf_conntrack.h
+
+The conntrack module (`net/netfilter/nf_conntrack_core.c`) sets the extension in the `NF_INET_PRE_ROUTING` hook when it creates or looks up a connection tracking entry. The entry records the original and reply tuples (src/dst IP, src/dst port, protocol) so that NAT translations applied to the forward direction can be reversed automatically on reply packets.
 
 kube-proxy relies entirely on conntrack for its DNAT implementation. When a new connection arrives for a ClusterIP (e.g., `10.96.0.1:443`), kube-proxy's iptables rules DNAT the first packet to a backend pod IP. Conntrack records this translation. All subsequent packets in the connection match the existing conntrack entry and are translated automatically — no iptables rule traversal is needed for established connections.
 
@@ -152,7 +162,7 @@ struct sk_buff
   ├─ sk     → struct sock (tcp_sock) → sk_receive_queue (sk_buff list)
   ├─ dev    → struct net_device      → nd_net → struct net (netns)
   ├─ _skb_refdst → struct dst_entry  → dev (output device)
-  ├─ nfct   → struct nf_conntrack    → original tuple, reply tuple, NAT info
+  ├─ skb_ext  → nf_ct_get() → struct nf_conn → original tuple, reply tuple, NAT info
   └─ skb_shinfo(skb)
        ├─ dataref   (shared data refcount for clones)
        ├─ frags[]   (page fragments for non-linear data)
@@ -186,7 +196,7 @@ struct net_device {
     unsigned int    mtu;                // maximum transmission unit
     unsigned char   dev_addr[MAX_ADDR_LEN]; // MAC address
     const struct net_device_ops *netdev_ops; // ndo_open, ndo_stop, ndo_start_xmit...
-    struct net      *nd_net;            // network namespace this device belongs to
+    possible_net_t   nd_net;            // network namespace this device belongs to (wraps struct net *)
     struct Qdisc    *qdisc;             // traffic control qdisc (pfifo_fast, fq_codel...)
     struct netdev_rx_queue *_rx;        // per-CPU receive queues (for multiqueue NICs)
     struct netdev_queue    *_tx;        // per-CPU transmit queues
@@ -250,7 +260,7 @@ Key points:
 ```
 tcp_sendmsg()                                           # net/ipv4/tcp.c
   └─ tcp_write_xmit()
-       └─ tcp_transmit_skb() → ip_queue_xmit()         # net/ipv4/ip_output.c
+       └─ __tcp_transmit_skb() → ip_queue_xmit()        # net/ipv4/ip_output.c
             └─ NF_HOOK(NF_INET_LOCAL_OUT)              # OUTPUT
                  └─ ip_output() → ip_finish_output()
                       └─ NF_HOOK(NF_INET_POST_ROUTING) # POSTROUTING
