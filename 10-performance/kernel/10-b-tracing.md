@@ -43,12 +43,15 @@ The probe list stored in `tracepoint.funcs` is RCU-protected: readers hold an RC
 ```c
 // include/linux/tracepoint.h (Linux 6.9)
 struct tracepoint {
-    const char              *name;          // e.g. "sched_switch"
-    struct static_key_false  key;           // jump label — 0 = disabled (NOP), 1 = enabled (JMP)
-    struct module           *mod;           // owning module (NULL for built-in)
-    void                   (*regfunc)(void);   // called when first probe registers
-    void                   (*unregfunc)(void); // called when last probe unregisters
-    struct tracepoint_func __rcu *funcs;    // RCU-protected list of probe functions
+    const char                  *name;          // e.g. "sched_switch"
+    struct static_key            key;           // jump label — 0 = disabled (NOP), 1 = enabled (JMP)
+    struct static_call_key      *static_call_key;  // faster static call dispatch (no indirect jump)
+    void                        *static_call_tramp; // trampoline for the static call
+    void                        *iterator;          // iterator function for multiple probes
+    void                        *probestub;         // stub when no probes registered
+    int                        (*regfunc)(void);    // called when first probe registers; returns 0 or -errno
+    void                       (*unregfunc)(void);  // called when last probe unregisters
+    struct tracepoint_func __rcu *funcs;            // RCU-protected list of probe functions
 };
 ```
 
@@ -81,8 +84,11 @@ struct trace_event_call {
     };
     struct trace_event      event;              // embedded trace_event (type, funcs)
     char                   *print_fmt;          // printf format string for trace output
-    struct event_filter __rcu *filter;          // per-event filter
-    void                   *mod;                // module pointer
+    struct event_filter        *filter;          // per-event filter
+    union {
+        void        *module;    // owning module pointer (for module-defined events)
+        atomic_t     refcnt;    // refcount (for dynamic events)
+    };
     void                   *data;
     int                     flags;              // TRACE_EVENT_FL_*
     int                     perf_refcount;      // number of perf users
@@ -124,7 +130,7 @@ struct trace_array (per trace instance)
 Write path:
 1. `ring_buffer_lock_reserve(buffer, len)` — atomically advances `tail_page->write` pointer
 2. Caller writes event data into the reserved slot
-3. `ring_buffer_unlock_commit(buffer, event)` — marks slot as committed, visible to readers
+3. `ring_buffer_unlock_commit(buffer)` — marks slot as committed, visible to readers
 
 The buffer never blocks writers — old entries are overwritten when the buffer is full (overwrite mode) or new writes fail silently (discard mode).
 
