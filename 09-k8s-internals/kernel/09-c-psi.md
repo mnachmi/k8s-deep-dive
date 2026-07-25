@@ -84,7 +84,7 @@ some avg10=0.80 avg60=0.30 avg300=0.05 total=56789012
 full avg10=0.20 avg60=0.05 avg300=0.01 total=12345678
 ```
 
-The per-cgroup PSI is computed by the same `psi_group` machinery, but each cgroup has its own `struct psi_group` embedded in `struct cgroup` (via `psi` field in `struct cgroup_subsys_state` for the CPU/memory/IO subsystems).
+The per-cgroup PSI is computed by the same `psi_group` machinery, but each cgroup has its own `struct psi_group psi` embedded directly in `struct cgroup` (defined in `include/linux/cgroup-defs.h`).
 
 ## 6. PSI Trigger Interface (inotify-free polling)
 
@@ -96,11 +96,11 @@ echo "some 50000 1000000" > /proc/pressure/memory
 # Then poll() on the file descriptor
 ```
 
-This is the mechanism kubelet uses for memory pressure alerts — more efficient than periodic `stat(2)` polling.
+When the `MemoryPressureEviction` feature gate is enabled, kubelet can use this mechanism for memory pressure alerts — more efficient than periodic `stat(2)` polling. The default kubelet EvictionManager polls cgroup memory stats and `/proc/meminfo` for `memory.available` directly.
 
 ## 7. kubelet Eviction Thresholds
 
-kubelet EvictionManager computes `memory.available` by reading cgroup stats and comparing to the node's total allocatable memory. It uses `/proc/pressure/memory` to detect pressure trends.
+kubelet EvictionManager computes `memory.available` by reading cgroup memory stats and comparing to the node's total allocatable memory from `/proc/meminfo`.
 
 Default eviction thresholds (configurable via `--eviction-hard`):
 
@@ -129,7 +129,7 @@ cat /proc/pressure/cpu
 watch -n1 "cat /sys/fs/cgroup/kubepods.slice/kubepods-pod<uid>.slice/memory.pressure"
 
 # bpftrace: trace PSI stall entry (when a task starts stalling on memory)
-bpftrace -e 'kprobe:psi_memstall_enter { printf("memstall pid=%d comm=%s\n", pid, comm); }'
+bpftrace -e 'kprobe:__psi_memstall_enter { printf("memstall pid=%d comm=%s\n", pid, comm); }'
 
 # Monitor PSI totals and compute delta (poor man's pressure meter)
 while true; do
