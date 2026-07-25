@@ -44,7 +44,7 @@ The probe list stored in `tracepoint.funcs` is RCU-protected: readers hold an RC
 // include/linux/tracepoint.h (Linux 6.9)
 struct tracepoint {
     const char                  *name;          // e.g. "sched_switch"
-    struct static_key            key;           // jump label — 0 = disabled (NOP), 1 = enabled (JMP)
+    struct static_key_false      key;           // jump label — default false/disabled (NOP), enabled → JMP
     struct static_call_key      *static_call_key;  // faster static call dispatch (no indirect jump)
     void                        *static_call_tramp; // trampoline for the static call
     void                        *iterator;          // iterator function for multiple probes
