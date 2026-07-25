@@ -81,7 +81,7 @@ A physical page frame can serve exactly one purpose at any given time: it is eit
 
 ### `flags` Field — Individual Bits
 
-The `flags` field is an `unsigned long` (64 bits on x86_64). The kernel defines named constants for each bit in `include/linux/page-flags.h`. The most important bits are:
+The `flags` field is an `unsigned long` (64 bits on x86_64). The kernel defines named constants for each bit in [`include/linux/page-flags.h`](https://elixir.bootlin.com/linux/v6.9/source/include/linux/page-flags.h). The most important bits are:
 
 | Flag | Meaning |
 |------|---------|
