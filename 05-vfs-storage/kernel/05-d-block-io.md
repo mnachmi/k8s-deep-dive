@@ -140,6 +140,8 @@ grep -E "nr_dirty|nr_writeback|pgpgout|wb_writeback" /proc/vmstat
 | `pgpgout` | Total pages written out (monotonic counter) |
 | `wb_writeback` | Writeback work items processed by flusher threads |
 
+> **Note:** `nr_unstable` (NFS unstable writes — written to server but not yet committed) was removed in Linux 5.14 when the NFS unstable-write path was eliminated. It no longer appears in `/proc/vmstat` on Linux 6.9.
+
 ---
 
 ## blk-mq: Multi-Queue Block Layer

@@ -223,3 +223,4 @@ ls -la /proc/$(pgrep kubelet)/fd | grep anon_inode | head -20
 | `sys_inotify_add_watch` | `fs/notify/inotify/inotify_user.c` | https://elixir.bootlin.com/linux/v6.9/source/fs/notify/inotify/inotify_user.c |
 | `balance_dirty_pages_ratelimited` | `mm/page-writeback.c` | https://elixir.bootlin.com/linux/v6.9/source/mm/page-writeback.c |
 | `vfs_fsync` | `fs/sync.c` | https://elixir.bootlin.com/linux/v6.9/source/fs/sync.c |
+| `vfs_open` | `fs/open.c` | https://elixir.bootlin.com/linux/v6.9/source/fs/open.c |
