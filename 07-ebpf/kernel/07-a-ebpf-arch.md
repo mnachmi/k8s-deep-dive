@@ -70,7 +70,7 @@ BPF_EXIT_INSN()  // code=0x95
 BPF_LD_MAP_FD(BPF_REG_1, map_fd)
 ```
 
-The verifier treats both slots as a single atomic operation and type-annotates the destination register as `PTR_TO_MAP_VALUE` after resolution.
+The verifier treats both slots as a single atomic operation and type-annotates the destination register as `CONST_PTR_TO_MAP` — a pointer to the `struct bpf_map` object itself. `PTR_TO_MAP_VALUE` is a distinct type assigned to the return of `bpf_map_lookup_elem()`, which points into the map's value storage.
 
 ## 3. struct bpf_prog
 
@@ -135,7 +135,7 @@ The verifier simulates the program without running it. It maintains a `struct bp
 
 **Phase 1 — DAG check (`check_cfg`)**
 
-Ensures the instruction graph is a DAG: no unreachable instructions, no back-edges that would create unbounded loops (bounded loops via `BPF_JMP_BACK` with the verifier's loop detector are permitted since Linux 5.3), and total instruction count does not exceed `BPF_COMPLEXITY_LIMIT_INSNS` (1,000,000).
+Ensures the instruction graph is a DAG: no unreachable instructions, no back-edges that create unbounded loops (since Linux 5.3, the verifier's loop-detection logic permits bounded backward jumps — ordinary backward jump opcodes whose iteration count the verifier can prove is finite), and total instruction count does not exceed `BPF_COMPLEXITY_LIMIT_INSNS` (1,000,000).
 
 **Phase 2 — Type tracking (`do_check`)**
 
