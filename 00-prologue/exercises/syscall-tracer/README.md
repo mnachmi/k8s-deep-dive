@@ -32,7 +32,7 @@ This builds the tracer and runs it against `/bin/ls /tmp`.
 ...
 
 --- child exited with 0 ---
-total syscalls traced: 42
+total syscalls traced: <N>
 ```
 
 Each line shows the sequential syscall index, name (if known), and raw syscall number.
