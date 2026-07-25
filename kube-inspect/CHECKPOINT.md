@@ -11,7 +11,7 @@ Each chapter adds capabilities to this tool.
 | 04 | PSI + OOM events per pod | internal/cgroup | done |
 | 05 | Mount ns inspection, overlay layers | internal/proc | done |
 | 06 | Network ns interface stats | internal/netns | done |
-| 07 | eBPF syscall counter per pod | internal/ebpf | pending |
+| 07 | eBPF objects per pod | internal/ebpf | done |
 | 08 | CPU affinity + NUMA placement | internal/cgroup | pending |
 | 09 | Node pressure + eviction thresholds | internal/kubelet | pending |
 | 10 | Full perf report — complete tool | internal/metrics | pending |

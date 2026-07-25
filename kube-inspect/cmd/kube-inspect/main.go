@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/linux-to-k8s/kube-inspect/internal/cgroup"
+	"github.com/linux-to-k8s/kube-inspect/internal/ebpf"
 	"github.com/linux-to-k8s/kube-inspect/internal/netns"
 	"github.com/linux-to-k8s/kube-inspect/internal/proc"
 )
@@ -21,12 +22,13 @@ var (
 	flagPSI        = flag.Bool("psi", false, "Show PSI pressure metrics and OOM events (requires --pod)")
 	flagMounts     = flag.Bool("mounts", false, "Show mount namespace table and overlay layer count (requires --pod)")
 	flagNetNS      = flag.Bool("netns", false, "Show network namespace interface stats (requires --pod)")
+	flagEBPF       = flag.Bool("ebpf", false, "Show BPF objects (programs and maps) per pod (requires --pod)")
 )
 
 func main() {
 	flag.Parse()
 	if *flagPod == "" && !*flagNode {
-		fmt.Fprintln(os.Stderr, "usage: kube-inspect --pod <uid> [--namespaces] [--cgroup] [--psi] [--mounts] [--netns] [--json]")
+		fmt.Fprintln(os.Stderr, "usage: kube-inspect --pod <uid> [--namespaces] [--cgroup] [--psi] [--mounts] [--netns] [--ebpf] [--json]")
 		os.Exit(1)
 	}
 
@@ -150,6 +152,35 @@ func main() {
 						iface.Name,
 						iface.RxBytes, iface.RxPackets, iface.RxErrors, iface.RxDropped,
 						iface.TxBytes, iface.TxPackets, iface.TxErrors, iface.TxDropped)
+				}
+			}
+		}
+
+		if *flagEBPF {
+			objs, err := ebpf.ListPodBPFObjects(*flagPod)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "ebpf error: %v\n", err)
+			} else {
+				fmt.Printf("\nBPF objects for pod %s:\n", *flagPod)
+				fmt.Printf("\n  Programs (%d):\n", len(objs.Progs))
+				if len(objs.Progs) == 0 {
+					fmt.Println("    (none)")
+				} else {
+					for _, p := range objs.Progs {
+						fmt.Printf("    PID=%-6d fd=%-4d type=%d (%s)  id=%-6d tag=%-16s  jited=%v\n",
+							p.PID, p.FD, p.ProgType, ebpf.ProgTypeName(p.ProgType),
+							p.ProgID, p.Tag, p.Jited)
+					}
+				}
+				fmt.Printf("\n  Maps (%d):\n", len(objs.Maps))
+				if len(objs.Maps) == 0 {
+					fmt.Println("    (none)")
+				} else {
+					for _, m := range objs.Maps {
+						fmt.Printf("    PID=%-6d fd=%-4d type=%d (%s)  id=%-6d key=%-4d value=%-4d max=%d\n",
+							m.PID, m.FD, m.MapType, ebpf.MapTypeName(m.MapType),
+							m.MapID, m.KeySize, m.ValueSize, m.MaxEntries)
+					}
 				}
 			}
 		}
