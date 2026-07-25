@@ -49,8 +49,12 @@ static const int nice_to_weight[] = {
 static void print_cpus_allowed(const char *label)
 {
     char buf[256];
-    FILE *f = fopen("/proc/self/status", "r");
-    if (!f) { perror("fopen /proc/self/status"); return; }
+    /* Use /proc/<tid>/status, not /proc/self/status — /proc/self is the
+     * process (tgid), which always shows the main thread's affinity. */
+    pid_t tid = (pid_t)syscall(SYS_gettid);
+    snprintf(buf, sizeof(buf), "/proc/%d/status", tid);
+    FILE *f = fopen(buf, "r");
+    if (!f) { perror("fopen /proc/<tid>/status"); return; }
     while (fgets(buf, sizeof(buf), f)) {
         if (strncmp(buf, "Cpus_allowed_list:", 18) == 0) {
             printf("  [%s] Cpus_allowed_list: %s", label, buf + 18);
@@ -77,7 +81,7 @@ static void *thread_fn(void *arg)
 {
     struct thread_arg *a = arg;
     pin_to_cpu(a->cpu);
-    /* sched_getcpu() reads the VDSO clock_gettime-style fast path on x86 */
+    /* sched_getcpu() uses the VDSO getcpu fast path on x86 */
     int actual = sched_getcpu();
     printf("  Thread %d: pinned to CPU %d, actually running on CPU %d\n",
            a->id, a->cpu, actual);
