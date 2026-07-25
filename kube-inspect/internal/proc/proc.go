@@ -140,6 +140,122 @@ func readNsInode(pid int, nstype string) uint64 {
 	return st.Ino
 }
 
+// MountInfo represents one line from /proc/pid/mountinfo.
+// Format: <MountID> <ParentID> <Major>:<Minor> <Root> <MountPoint> <Options> [optfields...] - <FSType> <Source> <SuperOpts>
+// See kernel/05-b-mount.md for field-by-field explanation.
+type MountInfo struct {
+	MountID    int    `json:"mount_id"`
+	ParentID   int    `json:"parent_id"`
+	Root       string `json:"root"`
+	MountPoint string `json:"mount_point"`
+	Options    string `json:"options"`
+	FSType     string `json:"fstype"`
+	Source     string `json:"source"`
+	SuperOpts  string `json:"super_opts"`
+}
+
+// ListPodMounts returns the mount table for the first process belonging to
+// the given pod UID, read from /proc/<pid>/mountinfo.
+func ListPodMounts(podUID string) ([]MountInfo, error) {
+	procs, err := ListPodProcesses(podUID)
+	if err != nil {
+		return nil, fmt.Errorf("listing pod processes: %w", err)
+	}
+	if len(procs) == 0 {
+		return nil, fmt.Errorf("no processes found for pod %s", podUID)
+	}
+	pid := procs[0].PID
+	path := fmt.Sprintf("/proc/%d/mountinfo", pid)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	var mounts []MountInfo
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		m, err := parseMountInfoLine(line)
+		if err != nil {
+			continue
+		}
+		mounts = append(mounts, m)
+	}
+	return mounts, nil
+}
+
+// parseMountInfoLine parses a single line from /proc/<pid>/mountinfo.
+// Format: mountID parentID major:minor root mountPoint options [optfields...] - fstype source superOpts
+func parseMountInfoLine(line string) (MountInfo, error) {
+	fields := strings.Fields(line)
+	// Need at least: 0=mountID 1=parentID 2=major:minor 3=root 4=mountPoint 5=options then "-" fstype source superOpts
+	if len(fields) < 7 {
+		return MountInfo{}, fmt.Errorf("mountinfo: too few fields: %q", line)
+	}
+	mountID, err := strconv.Atoi(fields[0])
+	if err != nil {
+		return MountInfo{}, fmt.Errorf("mountinfo: bad mount_id %q: %w", fields[0], err)
+	}
+	parentID, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return MountInfo{}, fmt.Errorf("mountinfo: bad parent_id %q: %w", fields[1], err)
+	}
+	root := fields[3]
+	mountPoint := fields[4]
+	options := fields[5]
+
+	// Scan for the separator "-" which marks the start of the per-filesystem fields.
+	sepIdx := -1
+	for i := 6; i < len(fields); i++ {
+		if fields[i] == "-" {
+			sepIdx = i
+			break
+		}
+	}
+	if sepIdx == -1 || len(fields) < sepIdx+4 {
+		return MountInfo{}, fmt.Errorf("mountinfo: missing '-' separator in %q", line)
+	}
+	fstype := fields[sepIdx+1]
+	source := fields[sepIdx+2]
+	superOpts := fields[sepIdx+3]
+
+	return MountInfo{
+		MountID:    mountID,
+		ParentID:   parentID,
+		Root:       root,
+		MountPoint: mountPoint,
+		Options:    options,
+		FSType:     fstype,
+		Source:     source,
+		SuperOpts:  superOpts,
+	}, nil
+}
+
+// CountOverlayLayers returns the number of lower layers in the overlay mount
+// at "/" for the given pod. It calls ListPodMounts and inspects the SuperOpts
+// field for "lowerdir=<a>:<b>:..." to count the colon-separated entries.
+// Returns 0, nil if no overlay mount on "/" is found.
+func CountOverlayLayers(podUID string) (int, error) {
+	mounts, err := ListPodMounts(podUID)
+	if err != nil {
+		return 0, fmt.Errorf("listing pod mounts: %w", err)
+	}
+	for _, m := range mounts {
+		if m.FSType != "overlay" || m.MountPoint != "/" {
+			continue
+		}
+		for _, opt := range strings.Split(m.SuperOpts, ",") {
+			if strings.HasPrefix(opt, "lowerdir=") {
+				val := strings.TrimPrefix(opt, "lowerdir=")
+				return strings.Count(val, ":") + 1, nil
+			}
+		}
+		// overlay mount found but no lowerdir — treat as 1 layer
+		return 1, nil
+	}
+	return 0, nil
+}
+
 // ListPodNamespaces returns per-process namespace info for all processes
 // belonging to the given pod UID (matched via cgroup v2 path).
 // It builds on ListPodProcesses and adds namespace inode data per process.

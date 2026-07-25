@@ -17,12 +17,13 @@ var (
 	flagNamespaces = flag.Bool("namespaces", false, "Show namespace inodes per process (requires --pod)")
 	flagCgroup     = flag.Bool("cgroup", false, "Show cgroup v2 resource stats (requires --pod)")
 	flagPSI        = flag.Bool("psi", false, "Show PSI pressure metrics and OOM events (requires --pod)")
+	flagMounts     = flag.Bool("mounts", false, "Show mount namespace table and overlay layer count (requires --pod)")
 )
 
 func main() {
 	flag.Parse()
 	if *flagPod == "" && !*flagNode {
-		fmt.Fprintln(os.Stderr, "usage: kube-inspect --pod <uid> [--namespaces] [--cgroup] [--psi] [--json]")
+		fmt.Fprintln(os.Stderr, "usage: kube-inspect --pod <uid> [--namespaces] [--cgroup] [--psi] [--mounts] [--json]")
 		os.Exit(1)
 	}
 
@@ -102,6 +103,29 @@ func main() {
 					psi.IOSome.Avg10, psi.IOSome.Avg60, psi.IOSome.Avg300)
 				fmt.Printf("  oom_events:  %d  oom_kills: %d\n",
 					psi.OOMCount, psi.OOMKillCount)
+			}
+		}
+
+		if *flagMounts {
+			mounts, err := proc.ListPodMounts(*flagPod)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "mounts error: %v\n", err)
+			} else {
+				fmt.Printf("\nMounts for pod %s:\n", *flagPod)
+				fmt.Printf("  %-6s  %-6s  %-11s %-20s %s\n",
+					"ID", "PARENT", "FSTYPE", "SOURCE", "MOUNTPOINT")
+				for _, m := range mounts {
+					fmt.Printf("  %-6d  %-6d  %-11s %-20s %s\n",
+						m.MountID, m.ParentID, m.FSType, m.Source, m.MountPoint)
+					if m.FSType == "overlay" && m.MountPoint == "/" {
+						layers, lerr := proc.CountOverlayLayers(*flagPod)
+						if lerr != nil {
+							fmt.Fprintf(os.Stderr, "overlay layers error: %v\n", lerr)
+						} else {
+							fmt.Printf("    overlay layers: %d\n", layers)
+						}
+					}
+				}
 			}
 		}
 	}
