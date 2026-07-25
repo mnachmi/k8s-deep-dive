@@ -156,9 +156,9 @@ struct bpf_array {
 
 Per-CPU variants (`BPF_MAP_TYPE_PERCPU_ARRAY`) store `nr_cpus` copies of each value, accessed with `this_cpu_ptr`. Atomic updates to scalar values use `cmpxchg`; larger values require a `bpf_spin_lock` embedded in the value struct.
 
-## 5. `BPF_MAP_TYPE_RINGBUF` — Lock-Free Event Streaming
+## 5. `BPF_MAP_TYPE_RINGBUF` — Event Streaming
 
-The ring buffer map was introduced in Linux 5.8 as a high-throughput, low-overhead replacement for `BPF_MAP_TYPE_PERF_EVENT_ARRAY`. It supports a single producer (a BPF program running on any CPU) and a single consumer (userspace polling via `ring_buffer__poll()` from libbpf), with lock-free reservation and commit.
+The ring buffer map was introduced in Linux 5.8 as a high-throughput, low-overhead replacement for `BPF_MAP_TYPE_PERF_EVENT_ARRAY`. It supports multiple producers (BPF programs running on any CPU) and a single consumer (userspace polling via `ring_buffer__poll()` from libbpf). The `struct bpf_ringbuf` contains a `spinlock_t` that serializes concurrent producers in `bpf_ringbuf_reserve` before the `cmpxchg` that claims the slot; the consumer path reads `consumer_pos` without a lock.
 
 ### `struct bpf_ringbuf`
 
@@ -181,7 +181,7 @@ struct bpf_ringbuf {
 
 `consumer_pos` and `producer_pos` are each page-aligned so that the kernel can map them into userspace as separate read-only and read-write pages respectively — the consumer updates `consumer_pos` to acknowledge records; the kernel updates `producer_pos` after committing a record.
 
-### Lock-Free Producer / Consumer Design
+### Producer / Consumer Design
 
 The producer path (`bpf_ringbuf_reserve`):
 
