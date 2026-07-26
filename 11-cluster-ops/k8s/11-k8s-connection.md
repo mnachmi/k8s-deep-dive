@@ -1,5 +1,13 @@
 # 11 — Kubernetes Bridge: Cluster Operations and Kernel Internals
 
+## When the Node Fails, the Kernel Tells You First
+
+Kubernetes cluster operations — node failures, kernel panics, hardware faults, workload disruptions — all produce signals at the kernel level before they produce signals at the Kubernetes level. The kernel writes to dmesg when a hardware error occurs. The watchdog fires an NMI when a CPU locks up. The OOM killer logs the killed process and its cgroup. By the time these events propagate to Kubernetes node conditions, to Prometheus alerts, to PagerDuty, potentially minutes have passed.
+
+The node-problem-detector DaemonSet exists to close this gap. It runs on every node, watches kernel-level signals (dmesg patterns, `/proc/` files, systemd journal entries), and translates them into Kubernetes NodeConditions and Events. A kernel OOM kill becomes a `KernelOOMKilling` condition. A hardware ECC error becomes a `CorruptDockerImage` or `ReadonlyFilesystem` condition. The operator who understands what kernel signal is underneath each NodeCondition can triage faster: instead of waiting for the Kubernetes condition to propagate, they can read dmesg directly, check `/proc/sys/kernel/tainted`, or look at `memory.events` in the relevant cgroup.
+
+Chapter 11 covers the kernel mechanisms that underlie cluster-level failure modes: `panic()` and the taint flag system, the NMI watchdog that detects lockups, and kexec/kdump that captures crash memory for post-mortem analysis. The sections below show how each of these maps to Kubernetes operational procedures and observability signals.
+
 ## 1. Architecture Overview
 
 | Event | Kernel Signal | K8s Response |

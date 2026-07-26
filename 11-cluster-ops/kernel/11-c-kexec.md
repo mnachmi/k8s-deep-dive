@@ -1,5 +1,15 @@
 # 11-c: kexec_load, kdump, struct kimage, /proc/vmcore
 
+## Capturing the Evidence Before It Disappears
+
+When a kernel panics, the evidence is ephemeral. The CPU registers contain the state of the failing thread. The kernel stack contains the call chain that led to the crash. The kmalloc heap contains the corrupted data structure that triggered the bug. All of this exists in DRAM, which is volatile — the moment the machine reboots, it is gone. The engineer who needs to debug the panic is left with only the few lines that made it to the serial console before the reboot, which typically lack the detail needed to identify root cause.
+
+kdump solves this problem by staging a second kernel in reserved memory during normal system startup, ready to execute if the primary kernel panics. When `panic()` is called, instead of rebooting or halting, the kernel executes `machine_kexec()` — which loads the pre-staged crash kernel into the CPU's execution context and transfers control to it without going through BIOS or firmware. The crash kernel boots in a minimal environment, mounts a filesystem, and writes the dying system's entire physical memory to a file called `/proc/vmcore`. This file is a complete snapshot of the failed system's RAM: registers, kernel stacks, page tables, slab allocator state, everything. The crash kernel then reboots normally.
+
+`kexec` is the mechanism underneath this. It is a syscall, `kexec_load(2)`, that loads a kernel and optional initramfs into a region of physical memory that the primary kernel reserves at boot time (`crashkernel=` kernel parameter). The loaded kernel is described by a `struct kimage` — containing the list of memory segments, the entry point address, and the control pages needed to execute the hand-off. When the primary kernel calls `machine_kexec()`, it walks the kimage segments, sets up an identity-mapped page table covering the target memory, and jumps to the entry point.
+
+For Kubernetes cluster operations, kdump enables post-mortem debugging of node panics that would otherwise be undiagnosable. The vmcore file can be analyzed with `crash`, a tool that provides a GDB-like interface to the frozen kernel state. Cloud providers often configure kdump so vmcores upload automatically to object storage on node recovery, giving site reliability engineers a complete snapshot of every node failure without any manual intervention at the time of the crash.
+
 ## 1. Source Locations
 
 | File | Key Symbols | URL |

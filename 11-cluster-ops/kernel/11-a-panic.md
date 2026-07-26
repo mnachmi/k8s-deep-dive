@@ -1,5 +1,15 @@
 # 11-a — Kernel Panic, Die Notifiers, Taint Flags, Oops Path
 
+## The Decision to Halt
+
+A kernel panic is not a crash. It is a decision. When the kernel detects a state it cannot safely recover from — a null pointer dereference in interrupt context, a stack overflow in a critical code path, a hardware error that corrupts in-flight data — it faces a binary choice: attempt to continue and risk silent data corruption, or halt the system immediately and loudly. The `panic()` function implements that choice.
+
+The original Unix systems, and Linux through most of its early history, treated panics as terminal events. The kernel printed a message to the console, the machine froze, and a human had to walk over and press the reset button. This was acceptable in a world of physical machines attended by operators. It became problematic in cloud environments where machines might be in a data center across the country, and unacceptable for Kubernetes nodes that must fail fast and recover automatically.
+
+The taint flag mechanism was added to communicate machine trustworthiness after non-fatal errors. When the kernel encounters a suspicious but non-fatal condition — a kernel module with no license, a machine check error that was corrected by ECC, an out-of-tree driver loaded — it sets a bit in the global `tainted` word. The taint word is exposed at `/proc/sys/kernel/tainted`. Support engineers, when debugging a reported kernel oops, look at taint flags first: a tainted kernel running proprietary drivers makes bug reproduction difficult and narrows what the upstream community can help with. Kubernetes uses the taint flags differently — through the node-problem-detector daemon, which reads dmesg for kernel error patterns and can apply Kubernetes node taints (`node.kubernetes.io/not-ready`, `NoSchedule`, `NoExecute`) when the kernel signals problems.
+
+The `panic_timeout` sysctl — set to -1 on most production Kubernetes nodes — controls whether the kernel reboots automatically after a panic. A node that panics and reboots can rejoin the cluster and be rescheduled without human intervention. A node that panics and waits indefinitely for console interaction is dead to the cluster until someone presses a button.
+
 ## 1. Source Locations
 
 | File | Key Symbols | URL |

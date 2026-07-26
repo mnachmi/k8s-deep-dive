@@ -1,5 +1,15 @@
 # 11-b NMI, Hardlockup/Softlockup Watchdog
 
+## When the Kernel Cannot Tell You It's Stuck
+
+A kernel panic is at least communicative. It prints a message, records a stack trace, and either reboots or halts with visible output. A lockup is worse: the machine becomes unresponsive without dying. A CPU gets stuck in a tight loop holding a spinlock. The interrupt handler that would normally preempt it cannot run because interrupts are disabled. No panic is triggered because no bug detection code runs — the kernel is simply stuck, forever executing the same instructions. From the outside, the machine looks hung. No log messages. No recovery. Kubernetes marks the node `NotReady` eventually (after the node lease expires), but cannot force a recovery.
+
+This scenario — a CPU stuck with interrupts disabled, unable to be preempted by the scheduler, unable to respond to user input — is what the NMI watchdog exists to detect and terminate. NMI stands for Non-Maskable Interrupt. Unlike ordinary hardware interrupts, an NMI cannot be disabled by the CPU's interrupt flag. Even a CPU that has executed `cli` (clear interrupt flag) to disable all other interrupts will still receive and handle an NMI. The CPU has no choice — it is a hardware mechanism that bypasses the software interrupt mask entirely.
+
+The NMI watchdog works by programming the CPU's Performance Monitoring Unit (PMU) to fire a PMU overflow interrupt — which is delivered as an NMI — every few hundred milliseconds. A separate per-CPU "hardlockup detector" records a timestamp each time this NMI fires. A second watchdog thread ("softlockup detector") runs as a highest-priority kernel thread and resets a per-CPU counter. If the hardlockup NMI fires and finds that the softlockup counter has not been reset in `watchdog_thresh` seconds (default 10), a CPU is stuck. The kernel calls `panic()`. The node crashes cleanly rather than hanging indefinitely.
+
+For Kubernetes, this means the difference between a node that fails fast (enabling pod rescheduling) and a node that hangs until the node lease TTL expires and the API server finally marks it `NotReady`. The `/proc/sys/kernel/watchdog_thresh` sysctl controls sensitivity. Setting it too low on a heavily loaded node causes false positives; setting it too high delays detecting real lockups. Production Kubernetes nodes typically leave this at the default — 10 seconds for hardlockup, 20 for softlockup — which provides detection fast enough to trigger the node lease timeout recovery path.
+
 ## 1. Source Locations
 
 | File | Key Symbols | URL |
