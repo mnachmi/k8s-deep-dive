@@ -1,99 +1,78 @@
-# 00-a — The x86-64 Syscall Table
+# The x86-64 Syscall Table — Kernel Deep Dive
 
-> **Source file:**
-> [`arch/x86/entry/syscalls/syscall_64.tbl`](https://elixir.bootlin.com/linux/v6.9/source/arch/x86/entry/syscalls/syscall_64.tbl)
-> (Linux 6.9, x86-64)
+## Source Location
 
-The syscall table is the canonical mapping between an integer that lives in the `rax`
-register and the C function that implements the syscall. Understanding its structure
-lets you answer the question: *when runc calls `clone3()`, what actually happens inside
-the kernel?*
+| File | Link |
+|------|------|
+| `arch/x86/entry/syscalls/syscall_64.tbl` | https://elixir.bootlin.com/linux/v6.9/source/arch/x86/entry/syscalls/syscall_64.tbl |
+| `arch/x86/kernel/syscall_64.c` | https://elixir.bootlin.com/linux/v6.9/source/arch/x86/kernel/syscall_64.c |
+| `arch/x86/entry/common.c` | https://elixir.bootlin.com/linux/v6.9/source/arch/x86/entry/common.c |
 
----
+## The Boundary Between Two Worlds
 
-## 1. The Syscall Table File
+The x86 processor runs in one of several privilege levels, called rings. Ring 0 is the kernel: code executing there can issue any instruction, read any physical memory address, program hardware directly. Ring 3 is userspace: code executing there cannot touch I/O ports, cannot modify page tables, cannot disable interrupts. The processor enforces this distinction in hardware — any attempt to execute a privileged instruction from Ring 3 causes a fault.
 
-`arch/x86/entry/syscalls/syscall_64.tbl` is a plain text file that the kernel build
-system processes with a Perl script
-([`arch/x86/entry/syscalls/syscallhdr.sh`](https://elixir.bootlin.com/linux/v6.9/source/arch/x86/entry/syscalls/syscallhdr.sh))
-to generate C headers.
+This separation is the foundation of every security guarantee Linux provides. But it creates a problem: userspace programs need to ask the kernel to do things. Reading a file requires the kernel to walk a directory, access a block device, copy bytes into a user buffer. Creating a process requires the kernel to allocate a `struct task_struct`, set up a new address space, and wire the new task into the scheduler. These operations cannot happen in Ring 3. They require a controlled, auditable mechanism to cross from userspace into kernel space and back.
 
-### Format of each line
+That mechanism is the system call. It is not a function call — the C calling convention does not work across privilege levels. It is a hardware-assisted mode switch. The processor saves the current instruction pointer and flags, switches to Ring 0, and jumps to a kernel-specified handler. After the kernel finishes, it restores the saved state and returns to Ring 3 exactly where it left off.
+
+The syscall table is the kernel's directory of everything userspace is allowed to ask for. Each entry maps an integer — the syscall number — to the C function that implements it. There are currently 460+ entries on x86-64. The number in `rax` at the moment of the syscall instruction determines which one runs.
+
+## A Brief History of the User/Kernel Interface
+
+The original x86 (32-bit) interface used `int 0x80` — a software interrupt. The CPU would execute the interrupt handler, which happened to be the kernel's syscall dispatcher. It worked, but it was slow: software interrupts involve pushing a hardware-defined interrupt frame onto the stack, looking up the interrupt descriptor table, performing privilege checks, and eventually executing `iret` on the return path. The overhead was measurable — tens to hundreds of nanoseconds per syscall on a 2000s-era processor.
+
+Intel introduced `sysenter`/`sysexit` in the Pentium II era (1997) and AMD introduced `syscall`/`sysret` for their 64-bit architecture. Both use Model Specific Registers (MSRs) to pre-configure the kernel's handler address, bypassing the interrupt descriptor table entirely. The `syscall` instruction, used on x86-64, is the faster path: it reads the handler address from the `IA32_LSTAR` MSR that the kernel writes during boot, performs the mode switch in about 10 cycles, and does not push a full hardware frame.
+
+The kernel sets this up in `arch/x86/kernel/cpu/common.c`:
+
+```c
+// Called once per CPU during boot
+wrmsrl(MSR_LSTAR, (unsigned long)entry_SYSCALL_64);
+```
+
+From that point on, every `syscall` instruction executed by any process on that CPU will jump to `entry_SYSCALL_64` — the assembly entry point covered in `00-b-entry-path.md`.
+
+## The Syscall Table File
+
+`arch/x86/entry/syscalls/syscall_64.tbl` is a plain text file processed by a Perl script during the kernel build. It has no special syntax — just whitespace-delimited fields that the build tooling transforms into C macros:
 
 ```
 <number>  <abi>  <name>  <entry_point>  [<compat_entry_point>]
 ```
 
-For example:
+A few representative lines:
 
 ```
 # From arch/x86/entry/syscalls/syscall_64.tbl (Linux 6.9)
-#
 0       common  read                    sys_read
 1       common  write                   sys_write
-2       common  open                    sys_open
-...
 57      common  fork                    sys_fork
-...
 155     common  pivot_root              sys_pivot_root
-...
 165     common  mount                   sys_mount
-...
 272     common  unshare                 sys_unshare
-...
 308     common  setns                   sys_setns
-...
 435     common  clone3                  sys_clone3
 ```
 
-### ABI column
+The `abi` column takes three values: `common` (available to both 64-bit native and 32-bit compatibility paths), `64` (64-bit native only), and `x32` (the x32 ABI — 32-bit pointers in 64-bit mode, used almost nowhere). Most interesting syscalls are `common`.
 
-The `abi` column can be:
-- `common` — available to both 64-bit and 32-bit (compatibility) syscall paths
-- `64` — 64-bit native only
-- `x32` — the x32 ABI (32-bit pointers in 64-bit mode; rare)
-
-### Generated output
-
-The build system runs:
-
-```bash
-# simplified view of what Makefile invokes
-perl arch/x86/entry/syscalls/syscalltbl.pl \
-     arch/x86/entry/syscalls/syscall_64.tbl \
-     arch/x86/include/generated/asm/syscalls_64.h
-```
-
-The resulting generated header at
-[`arch/x86/include/generated/asm/syscalls_64.h`](https://elixir.bootlin.com/linux/v6.9/source/arch/x86/include/generated/asm/syscalls_64.h)
-looks like:
+The build system processes this table with `arch/x86/entry/syscalls/syscalltbl.pl` to generate `arch/x86/include/generated/asm/syscalls_64.h`:
 
 ```c
-/* SPDX-License-Identifier: GPL-2.0 */
-/* File auto-generated by arch/x86/entry/syscalls/Makefile */
+/* Auto-generated — do not edit */
 __SYSCALL(0,  sys_read)
 __SYSCALL(1,  sys_write)
-__SYSCALL(2,  sys_open)
-...
+__SYSCALL(57, sys_fork)
 __SYSCALL(272, sys_unshare)
-...
 __SYSCALL(308, sys_setns)
-...
 __SYSCALL(435, sys_clone3)
 ```
 
-The `__SYSCALL` macro is defined differently depending on the context in which the
-header is included. When building `sys_call_table[]`, it expands to an array initialiser.
-
----
-
-## 2. `sys_call_table[]` — The Dispatch Array
-
-The array that the kernel actually indexes at runtime is defined in
-[`arch/x86/kernel/syscall_64.c`](https://elixir.bootlin.com/linux/v6.9/source/arch/x86/kernel/syscall_64.c):
+The `__SYSCALL` macro is not defined in this header — it is defined differently by whoever includes the header. This is a clever build-time trick. When `arch/x86/kernel/syscall_64.c` includes it, `__SYSCALL` expands to an array initializer:
 
 ```c
-// arch/x86/kernel/syscall_64.c (Linux 6.9, simplified)
+// arch/x86/kernel/syscall_64.c
 #define __SYSCALL(nr, sym) [nr] = (sys_call_ptr_t)sym,
 
 const sys_call_ptr_t sys_call_table[] = {
@@ -101,171 +80,112 @@ const sys_call_ptr_t sys_call_table[] = {
 };
 ```
 
-`sys_call_ptr_t` is a function pointer type:
+The result is a static array with function pointers at each index. `sys_call_table[0]` is `sys_read`. `sys_call_table[435]` is `sys_clone3`. Indexing into this array with `rax` takes one instruction.
+
+This flat-array design is not accidental. A hashtable would require hashing the syscall number and resolving potential collisions — several instructions instead of one. A linked list would require traversal — O(n). The flat array trades memory (460 pointers × 8 bytes ≈ 3.7 KB) for O(1) dispatch. At the rate syscalls happen on a busy system — millions per second — that tradeoff is obviously correct.
+
+## sys_call_table[] — The Dispatch Array
+
 ```c
 typedef asmlinkage long (*sys_call_ptr_t)(const struct pt_regs *);
 ```
-([`arch/x86/include/asm/syscall.h`](https://elixir.bootlin.com/linux/v6.9/source/arch/x86/include/asm/syscall.h))
 
-### How the kernel indexes into the table
+Every function pointer in `sys_call_table[]` has this signature: it takes one argument (a pointer to the saved register state, `struct pt_regs`), and returns a `long` (the syscall return value). The `asmlinkage` attribute tells the compiler that arguments come from the stack rather than from registers — but since `CONFIG_ARCH_HAS_SYSCALL_WRAPPER` was introduced in Linux 4.17, the actual C implementations receive typed arguments unwrapped from `pt_regs`, not `pt_regs` directly. The wrapper layer handles the translation.
 
-When a process executes the `syscall` instruction, the CPU switches to kernel mode.
-The kernel entry code (covered in detail in `00-b-entry-path.md`) calls
-[`do_syscall_64()`](https://elixir.bootlin.com/linux/v6.9/source/arch/x86/entry/common.c#L73)
-which does:
+The dispatch itself in `do_syscall_64()`:
 
 ```c
-// arch/x86/entry/common.c (Linux 6.9, annotated)
-__visible noinstr void do_syscall_64(struct pt_regs *regs, int nr)
-{
-    // nr comes from regs->orig_ax (the rax value at entry time)
-    if (likely(nr < NR_syscalls)) {
-        nr = array_index_nospec(nr, NR_syscalls);   // Spectre mitigation
-        regs->ax = sys_call_table[nr](regs);        // dispatch
-    }
-    ...
+// arch/x86/entry/common.c (Linux 6.9)
+if (likely(nr < NR_syscalls)) {
+    nr = array_index_nospec(nr, NR_syscalls);
+    regs->ax = sys_call_table[nr](regs);
 }
 ```
 
-`array_index_nospec` is a Spectre v1 mitigation: it clamps `nr` to `[0, NR_syscalls)`
-without a conditional branch that the CPU's branch predictor can learn.
+`array_index_nospec` is a Spectre v1 mitigation. The Spectre v1 vulnerability allows an attacker to speculatively read beyond an array's bounds — the CPU's branch predictor may decide `nr < NR_syscalls` is true and execute the array access before the comparison is verified, exposing data via cache timing. `array_index_nospec` uses a bitmask technique that clamps `nr` to the valid range without a conditional branch that the branch predictor can exploit.
 
-`NR_syscalls` is the total count of defined syscalls, computed at build time from the
-number of `__SYSCALL` lines in the generated header.
+This mitigation was added in 2018 as part of the industry-wide Spectre response. The kernel source has hundreds of `array_index_nospec` calls throughout, each marking a place where speculative access could expose kernel memory.
 
----
+## The SYSCALL_DEFINE Macros
 
-## 3. Key Syscalls for Containers
+You will see `SYSCALL_DEFINE1`, `SYSCALL_DEFINE2`, `SYSCALL_DEFINE5`, and so on throughout the kernel source. The number suffix is the argument count. These macros do more than define a function — they create a complete wrapper:
 
-Every component of the Kubernetes stack — from the Go runtime in kubelet, to
-containerd, to runc, to the application process itself — is a collection of syscalls.
-The following table focuses on the syscalls most relevant to container creation and
-lifecycle.
+```c
+// Simplified: what SYSCALL_DEFINE2(clone3, ...) expands to
+asmlinkage long __se_sys_clone3(const struct pt_regs *regs);
+static inline long __do_sys_clone3(struct clone_args __user *uargs, size_t size);
 
-| Syscall | Number (x86-64) | What it does | Which k8s component |
-|---------|----------------|--------------|---------------------|
-| `clone3` | 435 | Creates a new process/thread; accepts a `struct clone_args` that specifies which namespaces to create (PID, net, mnt, uts, ipc, user, cgroup) | runc, called from containerd-shim |
-| `unshare` | 272 | Detaches the calling process from one or more namespaces, creating new ones; used by runc to set up mount namespace before `pivot_root` | runc container setup |
-| `setns` | 308 | Joins an existing namespace given a file descriptor from `/proc/<pid>/ns/`; used by `kubectl exec` path and CNI plugins when entering the container's network namespace | containerd, CNI plugin |
-| `pivot_root` | 155 | Switches the root filesystem for the current mount namespace; runc calls this (via `pivot_root(new, put_old)`) to place the container's OCI layer stack as `/` | runc |
-| `mount` | 165 | Attaches a filesystem to the directory tree; used to bind-mount `/proc`, `/sys`, `/dev` into the container's mount namespace, and to mount cgroup2 pseudo-filesystems | runc, kubelet |
-| `openat` | 257 | Opens a file relative to a directory file descriptor; the Go runtime uses this constantly; containerd uses it to access image layers | nearly every component |
-| `read` | 0 | Reads bytes from a file descriptor; used for reading image layer blobs, kubelet config, etcd watch responses | nearly every component |
-| `write` | 1 | Writes bytes to a file descriptor; log output, response bodies, etcd writes | nearly every component |
-| `epoll_wait` | 232 | Waits for events on multiple file descriptors; the Go runtime uses `epoll` as its I/O multiplexer for all network connections | all Go-based components |
-| `futex` | 202 | Fast userspace mutex; the Go runtime's goroutine scheduler and channel operations use `FUTEX_WAIT`/`FUTEX_WAKE` for synchronisation | all Go-based components |
+asmlinkage long __se_sys_clone3(const struct pt_regs *regs) {
+    long ret = __do_sys_clone3(
+        (struct clone_args __user *)regs->di,   // rdi = arg1
+        (size_t)regs->si                         // rsi = arg2
+    );
+    return ret;
+}
+```
 
-### Kernel source references for the implementations
+The `__se_` (syscall entry) function unpacks arguments from `pt_regs` and calls the `__do_` function that has the normal C signature. The `__do_` function is what you actually read in the source. This separation exists for tracing tools, ptrace, and security systems that want to inspect arguments before or after the call.
 
-- `sys_clone3`: [`kernel/fork.c`](https://elixir.bootlin.com/linux/v6.9/source/kernel/fork.c) — search for `SYSCALL_DEFINE2(clone3`
-- `sys_unshare`: [`kernel/fork.c`](https://elixir.bootlin.com/linux/v6.9/source/kernel/fork.c) — search for `SYSCALL_DEFINE1(unshare`
-- `sys_setns`: [`kernel/nsproxy.c`](https://elixir.bootlin.com/linux/v6.9/source/kernel/nsproxy.c) — search for `SYSCALL_DEFINE2(setns`
-- `sys_pivot_root`: [`fs/namespace.c`](https://elixir.bootlin.com/linux/v6.9/source/fs/namespace.c) — search for `SYSCALL_DEFINE2(pivot_root`
-- `sys_mount`: [`fs/namespace.c`](https://elixir.bootlin.com/linux/v6.9/source/fs/namespace.c) — search for `SYSCALL_DEFINE5(mount`
+Before Linux 4.17, syscall functions directly took registers as arguments (via the old `asmlinkage` convention where arguments came from the stack in a specific order). The wrapper approach in `CONFIG_ARCH_HAS_SYSCALL_WRAPPER` makes it possible to do argument validation and sanitization at the boundary level rather than inside each syscall implementation.
 
-### The `SYSCALL_DEFINE` macros
+## The Container-Relevant Syscall Subset
 
-You will see `SYSCALL_DEFINE2`, `SYSCALL_DEFINE5`, etc. throughout the kernel source.
-The number is the argument count. These macros:
-1. Apply `asmlinkage` linkage (arguments come from the `pt_regs` struct, not from
-   processor registers directly, on x86-64 since the `CONFIG_ARCH_HAS_SYSCALL_WRAPPER`
-   change in 4.17).
-2. Create the `__se_sys_<name>` and `__do_sys_<name>` wrappers that peel arguments
-   out of `struct pt_regs`.
+Every component of the Kubernetes stack — from the Go runtime in kubelet, to containerd, to runc, to the application process — communicates with the kernel through syscalls. The following are the ones that define container lifecycle:
 
-See the macro definition at
-[`include/linux/syscalls.h`](https://elixir.bootlin.com/linux/v6.9/source/include/linux/syscalls.h).
+| Syscall | Number | C entry | Purpose in containers |
+|---------|--------|---------|----------------------|
+| `clone3` | 435 | `sys_clone3` | Creates the container process with new namespaces. Accepts `struct clone_args` specifying `CLONE_NEWPID \| CLONE_NEWNET \| CLONE_NEWNS \| CLONE_NEWIPC \| CLONE_NEWUTS` |
+| `unshare` | 272 | `sys_unshare` | Detaches the calling process from namespaces without forking. runc uses this to set up the mount namespace before `pivot_root` |
+| `setns` | 308 | `sys_setns` | Joins an existing namespace by file descriptor. `kubectl exec` and CNI plugins use this to enter a running container's network namespace |
+| `pivot_root` | 155 | `sys_pivot_root` | Replaces the root filesystem for the current mount namespace — the kernel mechanic that puts the OCI layer stack at `/` |
+| `mount` | 165 | `sys_mount` | Attaches a filesystem. runc uses this to bind-mount `/proc`, `/sys`, `/dev/shm`, and secrets into the container namespace |
+| `epoll_wait` | 232 | `sys_epoll_wait` | I/O event multiplexing. The Go runtime's netpoller is built on this — every gRPC connection, every kubelet watch, every API server call blocks here |
+| `futex` | 202 | `sys_futex` | Fast userspace mutex. The Go runtime's goroutine scheduler parks goroutines with `FUTEX_WAIT` and wakes them with `FUTEX_WAKE` |
+| `openat` | 257 | `sys_openat` | Opens files. Reading cgroup files, kubelet config, pod spec volumes — all `openat` |
 
----
+All of these are `common` ABI — they work from both 64-bit and 32-bit compatibility paths. Their implementations live in `kernel/fork.c` (fork/clone/unshare), `kernel/nsproxy.c` (setns), and `fs/namespace.c` (mount, pivot_root).
 
-## 4. Observing the Syscall Table at Runtime
-
-### Method 1: strace — count syscalls by name
-
-Count every syscall made by a running containerd process over 10 seconds:
+## Live Observation
 
 ```bash
-# Find containerd's PID first
-CPID=$(pidof containerd)
+# Method 1: strace — count syscalls by name for containerd over 10 seconds
+sudo strace -c -p "$(pidof containerd)" -e trace=all &
+SPID=$!; sleep 10; kill -INT $SPID
+# Look for clone3, setns, epoll_wait near the top
 
-# Attach strace and count for 10 seconds
-sudo strace -c -p "$CPID" -e trace=all &
-SPID=$!
-sleep 10
-kill -INT $SPID
-```
+# Method 2: perf — hardware event counting for container-relevant calls
+sudo perf stat \
+    -e 'syscalls:sys_enter_clone3' \
+    -e 'syscalls:sys_enter_setns' \
+    -e 'syscalls:sys_enter_pivot_root' \
+    -p "$(pidof containerd)" -- sleep 5
 
-Example output (your numbers will differ):
-```
-% time     seconds  usecs/call     calls    errors syscall
------- ----------- ----------- --------- --------- ----------------
- 34.12    0.023871          12      1992           epoll_wait
- 18.44    0.012905          13       992           futex
-  9.17    0.006420           6      1010           read
-  7.32    0.005124          10       512           write
-  4.88    0.003416           5       683           openat
-  2.11    0.001477          14       105           clone3
-  1.03    0.000721           7       103           setns
-  ...
-```
+# Method 3: verify the tracepoints exist in the running kernel
+ls /sys/kernel/debug/tracing/events/syscalls/ | grep sys_enter_clone
+# sys_enter_clone3  sys_enter_clone
 
-This tells you that `epoll_wait` and `futex` dominate containerd's time —
-confirming that it is mostly idle (waiting for events) with occasional goroutine
-synchronisation. The `clone3` calls appear when pods are being created.
-
-### Method 2: perf stat — hardware-level syscall event counting
-
-```bash
-# Count syscall enter events for containerd for 5 seconds
-sudo perf stat -e 'syscalls:sys_enter_clone3' \
-               -e 'syscalls:sys_enter_unshare' \
-               -e 'syscalls:sys_enter_setns' \
-               -e 'syscalls:sys_enter_pivot_root' \
-               -p "$(pidof containerd)" \
-               -- sleep 5
-```
-
-### Method 3: Read the table directly from /proc
-
-The kernel exposes available syscall names via the tracing subsystem:
-
-```bash
-# List all syscall tracepoints the kernel knows about
-ls /sys/kernel/debug/tracing/events/syscalls/ | grep sys_enter | head -20
-
-# Check that clone3 tracepoint exists
-ls /sys/kernel/debug/tracing/events/syscalls/sys_enter_clone3/
-```
-
-### Method 4: Correlate a number to a name
-
-To map a raw syscall number to its name (useful when reading strace output with
-`--raw` or audit logs):
-
-```bash
-# Using ausyscall (from auditd package)
-ausyscall x86_64 435          # outputs: clone3
-ausyscall x86_64 272          # outputs: unshare
-
-# Or read directly from kernel headers
+# Method 4: map a number to a name
+ausyscall x86_64 435    # → clone3
+ausyscall x86_64 272    # → unshare
 grep '^\s*435\s' /usr/include/asm/unistd_64.h
 # __NR_clone3 435
+
+# bpftrace: observe every clone3 call system-wide with its flags
+sudo bpftrace -e '
+tracepoint:syscalls:sys_enter_clone3 {
+    printf("comm=%-16s pid=%-8d flags=0x%llx\n",
+           comm, pid, args->uargs->flags);
+}'
 ```
 
----
+## Key Kernel References
 
-## Summary
-
-The syscall table is a static C array built at kernel compile time from
-`arch/x86/entry/syscalls/syscall_64.tbl`. The build system generates
-`arch/x86/include/generated/asm/syscalls_64.h` containing `__SYSCALL(nr, sym)` macros
-that initialise `sys_call_table[]` in `arch/x86/kernel/syscall_64.c`. At runtime,
-`do_syscall_64()` takes the value in `rax` and uses it as an index into this array.
-Spectre v1 protection is applied via `array_index_nospec` before the dispatch.
-
-The ten syscalls in the table above — especially `clone3`, `unshare`, `setns`,
-`pivot_root`, and `mount` — are the building blocks of every container. You will see
-each of them again in dedicated chapters.
-
-**Next:** [kernel/00-b-entry-path.md](00-b-entry-path.md) — how the CPU gets from
-`syscall` instruction to `do_syscall_64()`.
+| Symbol | File | Link |
+|--------|------|------|
+| `syscall_64.tbl` | arch/x86/entry/syscalls/syscall_64.tbl | https://elixir.bootlin.com/linux/v6.9/source/arch/x86/entry/syscalls/syscall_64.tbl |
+| `sys_call_table[]` | arch/x86/kernel/syscall_64.c | https://elixir.bootlin.com/linux/v6.9/source/arch/x86/kernel/syscall_64.c |
+| `do_syscall_64()` | arch/x86/entry/common.c | https://elixir.bootlin.com/linux/v6.9/source/arch/x86/entry/common.c |
+| `SYSCALL_DEFINE` macros | include/linux/syscalls.h | https://elixir.bootlin.com/linux/v6.9/source/include/linux/syscalls.h |
+| `sys_clone3` | kernel/fork.c | https://elixir.bootlin.com/linux/v6.9/source/kernel/fork.c |
+| `sys_setns` | kernel/nsproxy.c | https://elixir.bootlin.com/linux/v6.9/source/kernel/nsproxy.c |
+| `array_index_nospec` | include/linux/nospec.h | https://elixir.bootlin.com/linux/v6.9/source/include/linux/nospec.h |
