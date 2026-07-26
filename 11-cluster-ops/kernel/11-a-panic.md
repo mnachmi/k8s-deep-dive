@@ -33,10 +33,10 @@ BUG() / NULL deref / oops_exit() + panic_on_oops
     ▼
 panic(const char *fmt, ...)                   // kernel/panic.c
     │
-    ├─ 1. bust_spinlocks(1)                   // disable lockdep, make printk work
+    ├─ 1. bust_spinlocks(1)                   // disable spinlock contention checking so printk can proceed in locked context
     ├─ 2. smp_send_stop()                     // IPI to halt all other CPUs
     ├─ 3. atomic_notifier_call_chain(          // call panic_notifier_list
-    │       &panic_notifier_list, PANIC_ACTION, buf)
+    │       &panic_notifier_list, 0, buf)
     ├─ 4. kmsg_dump(KMSG_DUMP_PANIC)          // flush ring buffer to persistent storage
     ├─ 5. if (kexec_crash_loaded())           // kdump path
     │       crash_kexec(NULL)                 //   → machine_kexec() → crash kernel
@@ -59,7 +59,7 @@ The `panic_notifier_list` is an `atomic_notifier_head`. It uses `atomic_notifier
 // include/linux/panic.h (Linux 6.9) — selected flags
 #define TAINT_PROPRIETARY_MODULE    0   // (P) out-of-tree proprietary module loaded
 #define TAINT_FORCED_MODULE         1   // (F) module force-loaded
-#define TAINT_CPU_OUT_OF_SPEC       2   // (S) SMP kernel on non-SMP hardware
+#define TAINT_CPU_OUT_OF_SPEC       2   // (S) CPU out of spec (overclocking, excessive thermals, hw errata)
 #define TAINT_FORCED_RMMOD          3   // (R) module force-unloaded
 #define TAINT_MACHINE_CHECK         4   // (M) MCE (hardware error) occurred
 #define TAINT_BAD_PAGE              5   // (B) bad page accessed
@@ -88,23 +88,16 @@ An "oops" is a recoverable kernel fault (process killed, kernel continues). An "
 - The fault occurs in interrupt context (no process to kill)
 - The fault is in a kernel thread (no user process to kill)
 
-```c
-// kernel/panic.c
-void oops_enter(void)
-{
-    tracing_off();          // stop ftrace
-    /* if in_interrupt(): cannot kill a process → will become panic */
-    if (in_interrupt())
-        panic("Fatal exception in interrupt");
-}
+`oops_enter()` (`kernel/panic.c`) turns off tracing and increments the global oops counter. When the fault is in interrupt context, `die()` in the architecture handler calls `panic("Fatal exception in interrupt")` before reaching `oops_enter()`.
 
-void oops_exit(void)
-{
-    tracing_on();
-    print_oops_end_marker();
-    if (panic_on_oops)
-        panic("Fatal exception");
-}
+`oops_exit()` (`kernel/panic.c`) re-enables tracing and prints the oops end marker. When `sysctl kernel.panic_on_oops=1`, the architecture die path calls `panic("Fatal exception")` after `oops_exit()` returns — the check is in the caller, not in `oops_exit()` itself.
+
+```c
+// Conceptual flow — see kernel/panic.c + arch/x86/kernel/dumpstack.c
+oops_enter();              // tracing_off(), increment oops counter
+    // architecture prints register dump, stack trace
+oops_exit();               // tracing toggle, print_oops_end_marker()
+    // if panic_on_oops: caller calls panic("Fatal exception")
 ```
 
 ## 6. Live Observation
