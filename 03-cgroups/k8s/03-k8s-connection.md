@@ -1,5 +1,15 @@
 # Chapter 03 — cgroups v2: Kubernetes Connection
 
+## From YAML to Kernel Enforcement
+
+When you write `resources.limits.memory: "256Mi"` in a Pod spec, you are not asking Kubernetes to do anything clever. You are asking it to write the number `268435456` (256 × 1024 × 1024) into a file at `/sys/fs/cgroup/kubepods/burstable/pod<uid>/<container>/memory.max`. The Linux kernel will then enforce that limit by calling `try_charge()` on every page fault in that container's processes, failing the allocation if the limit is exceeded, and eventually triggering `mem_cgroup_out_of_memory()` if reclaim cannot help.
+
+This directness is cgroups' great strength and the source of most operator confusion. The abstraction is thin. The kubelet does not use a complex API to enforce resource limits — it writes numbers to pseudofiles and the kernel reads them. Understanding the mapping between Pod spec fields and cgroup files means you can:
+- Read the exact limits and usage directly from the kernel (without relying on `kubectl top`)
+- Diagnose CPU throttling before it shows up in application metrics
+- Understand why a container was OOM-killed and what the OOM killer saw
+- Verify that resource limits are being enforced correctly without waiting for a load test
+
 The kubelet is responsible for translating Pod resource specifications into cgroup v2 filesystem writes. Every `resources.limits` and `resources.requests` field in a Pod spec maps to one or more files under `/sys/fs/cgroup/kubepods/`. This document shows the exact mapping, the QoS classification that determines the cgroup path, and how to diagnose OOM kills and CPU throttling at the cgroup level.
 
 ## Section 1 — Kubernetes QoS Classes and cgroup Hierarchy

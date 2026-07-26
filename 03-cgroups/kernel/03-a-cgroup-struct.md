@@ -7,157 +7,165 @@
 | `include/linux/cgroup-defs.h` | https://elixir.bootlin.com/linux/v6.9/source/include/linux/cgroup-defs.h |
 | `kernel/cgroup/cgroup.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/cgroup/cgroup.c |
 
-`struct cgroup` is defined in `include/linux/cgroup-defs.h`. The implementation — creation, migration, destruction, file operations — lives in `kernel/cgroup/cgroup.c`.
+## The Problem Cgroups Solve
 
-## cgroup v1 vs v2: Why the Unified Hierarchy
+For most of Unix's history, resource management was a per-process affair. You could set a process's priority with `nice`, limit its open file count with `setrlimit`, and send it a signal to terminate it. But you could not say: "all the processes belonging to this web server, collectively, may use no more than 2 GB of RAM and 1.5 CPUs." There was no first-class kernel concept for a *group* of processes as a resource-accounting unit.
 
-**cgroup v1** mounted each controller at its own path:
+This gap mattered less when servers ran one application at a time. It became intolerable when machines started running dozens of services simultaneously, and catastrophic when containers arrived and every server began hosting hundreds of isolated applications. Without group accounting, a single runaway process could consume all available memory and bring down every other tenant on the machine. Without group enforcement, CPU guarantees between services were advisory at best and fictional at worst.
+
+Control groups — cgroups — are the kernel's answer. A cgroup is an administrative boundary around a set of processes. The kernel tracks resource consumption for the group as a whole and enforces limits at the group level. Every container you have ever run is backed by a cgroup. Every Kubernetes pod is a cgroup. The `256Mi` memory limit and `500m` CPU request in a Pod spec are ultimately `memory.max` and `cpu.max` entries in a cgroup directory.
+
+## The Two Eras: v1's Fragmentation and v2's Unified Hierarchy
+
+Cgroups were not designed all at once. They grew organically from separate teams adding separate controllers for separate purposes, and the architecture reflected that chaos.
+
+**cgroup v1** (introduced in Linux 2.6.24, 2008) mounted each controller independently:
 
 ```
-/sys/fs/cgroup/memory/   (mounted with -t cgroup -o memory)
+/sys/fs/cgroup/memory/
 /sys/fs/cgroup/cpu/
 /sys/fs/cgroup/cpuacct/
 /sys/fs/cgroup/blkio/
 /sys/fs/cgroup/pids/
 ```
 
-This created serious consistency problems: a process could be in different positions in the memory hierarchy and the cpu hierarchy. There was no atomic way to move a task across all controllers. Each controller had subtly different semantics and file names.
+Each of these was a separate filesystem instance, a separate hierarchy, a separate tree. This meant a process could be in `/sys/fs/cgroup/memory/app/frontend/` but simultaneously in `/sys/fs/cgroup/cpu/app/` — at different depths, in different subtrees, with no requirement that the two hierarchies even agree on what "app" means.
 
-**cgroup v2** (unified hierarchy) uses a single mount:
+The consequences were severe. There was no atomic way to move a process across all controllers simultaneously. A migration that touched memory first, then cpu, was a window during which the process was partially moved — observable by anyone walking either hierarchy. Controllers had different file names for equivalent concepts, different semantics for inheritance, and different interpretations of "limit." The `memory` controller used `memory.limit_in_bytes`; the `cpu` controller used `cpu.cfs_quota_us` and `cpu.cfs_period_us`; the `blkio` controller had yet another set of files and throttling semantics. Writing a container runtime that used all of them correctly was an exercise in handling a dozen independent, subtly-incompatible interfaces.
+
+Tejun Heo spent years fixing these problems and ultimately concluded that the v1 architecture was not fixable incrementally. **cgroup v2** (merged in Linux 4.5, 2016; production-ready in 4.15+) starts from a different premise: there is exactly one hierarchy, and all controllers share it.
 
 ```
-/sys/fs/cgroup/          (mounted with -t cgroup2)
+/sys/fs/cgroup/          (mounted once: -t cgroup2)
 ```
 
-All controllers share one hierarchy. A process is always at the same level in every controller's view. Controllers are enabled per-directory by writing to `cgroup.subtree_control`. The kernel enforces the "no internal tasks" rule — a cgroup with controllers enabled cannot also have tasks (tasks must live in leaf cgroups).
-
-To verify which mode your system uses:
+In v2, a process lives at exactly one place in the tree. Moving it to a different cgroup is a single atomic operation — one `cgroup.procs` write — that covers all controllers at once. Every controller sees the same tree, uses consistent file naming, and respects consistent inheritance rules. Kubernetes 1.25 made cgroup v2 the default precisely because proper QoS enforcement, PSI pressure metrics, and per-pod swap accounting require it.
 
 ```bash
+# Verify which mode your system uses
 mount | grep cgroup
-# cgroup v2 only: "cgroup2 on /sys/fs/cgroup type cgroup2"
-# mixed:          also shows "cgroup on /sys/fs/cgroup/... type cgroup"
+# Pure v2:  "cgroup2 on /sys/fs/cgroup type cgroup2"
+# Mixed:    also shows "cgroup on /sys/fs/cgroup/<controller> type cgroup"
+
+# Force pure v2
+# Add to kernel command line: cgroup_no_v1=all
 ```
 
-Force pure v2 with the kernel parameter `cgroup_no_v1=all`. Modern systemd (248+) defaults to v2 when the kernel supports it. Kubernetes requires cgroup v2 for proper QoS enforcement and PSI (Pressure Stall Information) — it became the default in Kubernetes 1.25.
+## struct cgroup
 
-## struct cgroup (Key Fields)
+With the design context in place, `struct cgroup` makes sense as a whole. It is the kernel's representation of one node in the cgroup tree — one directory under `/sys/fs/cgroup`. Everything that can be said about a group of processes from a resource-management perspective is reachable from this struct.
 
 ```c
 // include/linux/cgroup-defs.h (key fields — struct is much larger in source)
 struct cgroup {
     /* kernfs backing — the filesystem directory */
-    struct kernfs_node        *kn;           // directory node in cgroupfs
-    struct cgroup_file         procs_file;   // cgroup.procs file
-    struct cgroup_file         events_file;  // cgroup.events file
+    struct kernfs_node        *kn;
+    struct cgroup_file         procs_file;
+    struct cgroup_file         events_file;
 
     /* hierarchy navigation */
-    struct cgroup_root        *root;         // which cgroupfs hierarchy this belongs to
-    struct cgroup             *parent;       // parent cgroup (NULL for hierarchy root)
-    u64                        id;           // unique 64-bit ID (visible in cgroup.id file)
-    int                        level;        // depth from root (root=0, children=1, ...)
-    int                        max_depth;    // deepest allowed subtree depth
-    int                        nr_descendants; // count of all descendant cgroups
+    struct cgroup_root        *root;
+    struct cgroup             *parent;
+    u64                        id;
+    int                        level;
+    int                        max_depth;
+    int                        nr_descendants;
 
-    /* reference counting */
-    struct percpu_ref           self;        // reference to this cgroup's lifetime
-    atomic_t                    online_cnt;  // processes online in this cgroup
+    /* lifetime */
+    struct percpu_ref           self;
+    atomic_t                    online_cnt;
 
     /* subsystem state — one pointer per controller */
     struct cgroup_subsys_state __rcu *subsys[CGROUP_SUBSYS_COUNT];
 
     /* task membership */
-    struct list_head            cset_links;  // css_sets that reference this cgroup
-    int                         nr_tasks;    // tasks directly in this cgroup (not children)
-    int                         nr_populated_csets; // non-empty css_sets
+    struct list_head            cset_links;
+    int                         nr_tasks;
+    int                         nr_populated_csets;
 
     /* resource pressure */
-    struct psi_group            psi;         // PSI (Pressure Stall Information) data
+    struct psi_group            psi;
 
     /* BPF programs attached to this cgroup */
     struct cgroup_bpf           bpf;
 
     /* controller enablement */
-    u16                         subtree_control;  // controllers enabled for children
-    u16                         subtree_ss_mask;  // controllers with tasks in subtree
+    u16                         subtree_control;
+    u16                         subtree_ss_mask;
 };
 ```
 
-### Field-by-Field Explanation
+### The Filesystem Layer: `kn`, `procs_file`, `events_file`
 
-**`kn` — `struct kernfs_node *`**
+The `kn` field is a `struct kernfs_node *` — the node that backs this cgroup's directory in the cgroupfs filesystem. When you `ls /sys/fs/cgroup/kubepods/`, every entry you see corresponds to a kernfs node. When you `open()` `/sys/fs/cgroup/kubepods/pod123/memory.max`, the VFS resolves the path, reaches this node, and dispatches to the memory controller's registered file operations. kernfs is a pseudo-filesystem layer the kernel uses specifically for these kinds of "everything is a file" interfaces; it handles inode management, directory notifications, and file operation dispatch so that individual subsystems like the cgroup memory controller don't have to.
 
-The kernfs node that backs this cgroup's directory on the filesystem. Every file operation on files inside a cgroup directory (`memory.max`, `cgroup.procs`, `cpu.max`) goes through this node's registered file operations. When you `open()` `/sys/fs/cgroup/kubepods/pod123/memory.max`, the VFS layer resolves the path through kernfs, reaches this `kn`, and dispatches to the memory controller's `seq_show` or `write` function. The kernfs node also holds the directory's inode metadata (permissions, timestamps).
+`procs_file` and `events_file` are wrapper structs around specific kernfs files within the cgroup directory. They are kept as embedded fields — not pointers to heap-allocated objects — because the kernel needs to efficiently trigger `kernfs_notify()` on them when state changes. When you `poll()` on `cgroup.events` waiting for a cgroup to become empty, the wakeup comes from a `kernfs_notify()` call on `events_file`. When you write a PID to `cgroup.procs`, the request lands in `cgroup_procs_write()`, which resolves to `procs_file` and from there to the migration machinery.
 
-**`procs_file`, `events_file` — `struct cgroup_file`**
+### The Tree: `root`, `parent`, `id`, `level`
 
-Wrapper structs around specific kernfs files within the cgroup directory. `procs_file` backs `cgroup.procs` — writing a PID here triggers `cgroup_procs_write()` which migrates the process. `events_file` backs `cgroup.events` — it reports `populated` (1 if any tasks are in the subtree) and `frozen`. These are kept as embedded structs so the kernel can trigger a kernfs notification (`kernfs_notify()`) to wake up `poll()` waiters when the state changes.
+`root` points to the `struct cgroup_root` that owns this hierarchy. In cgroup v2 there is exactly one root — `cgrp_dfl_root`, defined at the top of `kernel/cgroup/cgroup.c`. Every cgroup on the system traces back to it. `root` gives you fast access to which subsystems are active (`root->subsys_mask`) and the root cgroup itself (`root->cgrp`).
 
-**`root` — `struct cgroup_root *`**
+`parent` is the immediate parent in the tree — NULL only for the root cgroup itself. The parent relationship drives nearly everything: controller settings are inherited from parent to child during `mkdir`, resource limits walk up the tree to check for ancestor constraints, and `rmdir` refuses to proceed if a cgroup still has descendants. The NULL check on `parent` is the sentinel that prevents `cgroup_rmdir()` from attempting to delete the root.
 
-Points to the hierarchy root this cgroup belongs to. In cgroup v2 there is exactly one root — `cgrp_dfl_root` (the default root). In cgroup v1 each controller had its own `cgroup_root`. This pointer lets any code path quickly determine which subsystems are active (`root->subsys_mask`) and reach the root cgroup (`root->cgrp`).
+`id` is a kernel-assigned 64-bit identifier, unique across the lifetime of the system and visible to userspace via `cgroup.id`. It is the value returned by `bpf_get_current_cgroup_id()` in BPF programs, used in audit logs, and referenced by systemd when it tracks cgroup lifetimes. The kernel assigns IDs via `idr_alloc()` and does not reuse them until the cgroup is destroyed and a new one created in its place.
 
-**`parent` — `struct cgroup *`**
+`level` records depth from the root: 0 for the root, 1 for its direct children, and so on. On a Kubernetes node you will typically see pod cgroups at level 2 or 3 (`kubepods/besteffort/podUID`) and container cgroups one level deeper. It matters for enforcing `max_depth` limits and for tools that display the tree — `systemd-cgls` uses it to compute indentation.
 
-The parent cgroup in the tree. NULL only for the root cgroup. Used during `mkdir` to inherit controller settings, during `rmdir` to detach, and during resource limit inheritance walks. The root cgroup's `parent` being NULL is the sentinel that prevents `cgroup_rmdir()` from attempting to delete the root.
+### Lifetime: `self`, `online_cnt`
 
-**`id` — `u64`**
+`self` is a `struct percpu_ref` — the primary reference counter governing when this `struct cgroup` can be freed. `percpu_ref` is not a plain atomic; it maintains a per-CPU counter array, so incrementing a reference from any CPU only touches that CPU's cache line rather than bouncing a shared atomic across cores. This matters because cgroup lookups happen on every memory allocation, every scheduler tick, and every syscall that the kernel must account — the reference paths are extremely hot.
 
-A unique 64-bit identifier assigned at cgroup creation time (via `idr_alloc()`). Visible in userspace via `cat /sys/fs/cgroup/some/path/cgroup.id`. Used in BPF programs (`bpf_get_current_cgroup_id()` returns this value), in audit logs, and in systemd's tracking. Stable for the lifetime of the cgroup — not reused until the cgroup is destroyed and a new one is created.
+The percpu design has a cost: summing all per-CPU slots is expensive, so it is only done when the refcount approaches zero and the system is trying to tear the cgroup down. The transition from "fast percpu mode" to "atomic mode" happens via `percpu_ref_kill()`, which marks the ref as dying and allows the sum to be computed. This is why cgroup destruction is an asynchronous process — you cannot immediately know the refcount is zero, so teardown is scheduled through a work queue.
 
-**`level` — `int`**
+`online_cnt` is a simpler `atomic_t` that tracks how many processes are currently running in this cgroup's subtree. Combined with `nr_descendants`, it determines the `populated` state that `cgroup.events` reports.
 
-Depth from the root. Root cgroup is level 0, its direct children are level 1, grandchildren level 2, and so on. Kubernetes pod cgroups typically sit at level 2 or 3 (`kubepods/besteffort/pod<uid>`) and container cgroups at level 3 or 4. Used to enforce `max_depth` limits and by tools like `systemd-cgls` to indent the tree display.
+### The Bridge to Controllers: `subsys[]`
 
-**`max_depth` — `int`**
+`subsys[CGROUP_SUBSYS_COUNT]` is the most important field in `struct cgroup`. It is an array of pointers, one slot per compiled-in controller, where each slot holds a pointer to that controller's per-cgroup state struct.
 
-Maximum allowed depth of the subtree rooted at this cgroup. Written via `cgroup.max.depth`. Default is `INT_MAX` (unlimited). Kubernetes does not typically restrict this, but it can be used to prevent runaway nesting.
+The memory controller's state for this cgroup lives at `subsys[memory_cgrp_id]`. It is a `struct cgroup_subsys_state *` — but that pointer actually points to the beginning of a `struct mem_cgroup`, because `mem_cgroup` embeds `struct cgroup_subsys_state` as its first member. The cpu controller's state at `subsys[cpu_cgrp_id]` is really a `struct task_group`. The pids controller's state is a `struct pids_cgroup`. In each case the common header (`struct cgroup_subsys_state`) is first, so a blind cast between the generic type and the controller-specific type is safe.
 
-**`nr_descendants` — `int`**
+The `__rcu` annotation on these pointers means readers must use `rcu_dereference()` to access them. Controller state can be toggled while the system is running — enabling a controller on a cgroup causes a new state struct to be allocated and installed — and RCU ensures that code holding a pointer to an old controller state can finish using it safely even if it has been replaced.
 
-Count of all cgroups in this cgroup's subtree, not counting itself. Updated atomically when child cgroups are created or destroyed. Used to enforce `cgroup.max.descendants` limits and for the `populated` event in `cgroup.events`.
+When a process allocates memory, the allocator calls `mem_cgroup_charge()`, which reads `task->cgroups->subsys[memory_cgrp_id]` to find the `struct mem_cgroup` for this process's cgroup. The entire journey from "I need 4 KB" to "does this cgroup have budget for 4 KB" runs through this pointer chain on every allocation. Its performance matters enormously.
 
-**`self` — `struct percpu_ref`**
+### Task Membership: `cset_links`, `nr_tasks`, `nr_populated_csets`
 
-The primary reference counter for this cgroup's lifetime. `percpu_ref` uses per-CPU counters to avoid cache-line bouncing under high concurrency — each CPU increments its own slot, and the count is summed only when transitioning to atomic mode (during teardown). The cgroup is not freed until this reference drops to zero. Code that needs to keep a cgroup alive (BPF, iterators, etc.) calls `css_get()` which ultimately increments this ref.
+These fields answer the question "which tasks are in this cgroup?" but they do so indirectly, through `css_set` structs rather than a direct task list. The reason is architectural and worth understanding.
 
-**`online_cnt` — `atomic_t`**
+Naively, you might store a list of `task_struct *` directly on each cgroup. But a task belongs to multiple cgroups — one per controller. If the system has 12 controllers and a task changes its memory cgroup, you would need to atomically remove it from the old memory cgroup's task list and add it to the new one, while simultaneously keeping the cpu cgroup's list, the pids cgroup's list, and so on all consistent. That atomicity problem is intractable without a coarse lock that would serialize all I/O on all cgroup files.
 
-Tracks how many processes are currently running (online) in this cgroup's subtree. Combined with `nr_descendants` to compute the `populated` state for `cgroup.events`.
+The solution is `struct css_set` — a struct that captures one unique combination of (memory cgroup, cpu cgroup, pids cgroup, ...) for a set of tasks. Migrating a task to a new cgroup reduces to a single pointer swap: `task->cgroups = new_css_set`. The old and new css_set each contain all the controller pointers; the swap is atomic.
 
-**`subsys[CGROUP_SUBSYS_COUNT]` — `struct cgroup_subsys_state __rcu *`**
+`cset_links` is the list head that connects this `struct cgroup` to all `css_set` instances that include this cgroup in their membership. To enumerate all tasks in a cgroup, the kernel walks `cset_links` to find every css_set that references this cgroup, then walks each css_set's task list. Reading `cgroup.procs` traverses this two-level structure.
 
-The critical array that links a cgroup to each active controller's per-cgroup state. `CGROUP_SUBSYS_COUNT` is the compile-time count of all compiled-in controllers. For each enabled controller, this slot holds a pointer to the controller-specific struct (e.g., `struct mem_cgroup` for the memory controller, `struct task_group` for the cpu controller). The `__rcu` annotation means readers must use `rcu_dereference()`. The common header `struct cgroup_subsys_state` at the start of each controller struct holds the back-pointer to this `struct cgroup`.
+`nr_tasks` counts processes directly in this cgroup (not descendants). It must be zero before `rmdir` will succeed. `nr_populated_csets` counts how many of those css_sets actually have tasks, avoiding a full walk to compute the `populated` state for `cgroup.events`.
 
-**`cset_links` — `struct list_head`**
+### Resource Pressure: `psi`
 
-A doubly-linked list head connecting this cgroup to all `css_set` structs that reference it. A `css_set` represents one unique combination of cgroup memberships for a set of tasks. When a task's cgroup membership changes (via `cgroup.procs` write), a new `css_set` is found or created, and this list is updated. To enumerate all tasks in a cgroup, the kernel walks `cset_links` to find all `css_set` instances, then walks each `css_set`'s task list.
+`psi` is an embedded `struct psi_group` — the Pressure Stall Information accounting data for this cgroup. PSI tracks the fraction of time that tasks in the cgroup are stalled waiting for CPU, memory, or I/O. "Some" pressure means at least one task is stalled; "full" pressure means *all* runnable tasks are stalled, which is the more dangerous condition.
 
-**`nr_tasks` — `int`**
+The mechanism works by noting the exact timestamp whenever a task transitions to a waiting state and recording when it resumes. The accumulated stall time, divided by elapsed wall time, gives a percentage. These percentages are computed as exponentially-weighted moving averages over 10-second, 60-second, and 300-second windows.
 
-Number of tasks directly in this cgroup (not counting descendants). A cgroup can only be rmdir'd when this is 0 and `nr_descendants` is also 0 (the cgroup is fully empty).
+PSI was the prerequisite for Kubernetes's memory eviction improvements in 1.22+. Before PSI, the kubelet detected memory pressure by polling `/proc/meminfo`. PSI lets it detect per-cgroup memory pressure with millisecond latency by reading `memory.pressure`. The difference between "this node is under memory pressure" (system-wide) and "this specific pod is under memory pressure" (cgroup-scoped) is what allows the kubelet to evict the right pod rather than reacting to aggregate pressure.
 
-**`nr_populated_csets` — `int`**
+### BPF Integration: `bpf`
 
-Count of `css_set` instances associated with this cgroup that have at least one task. Used to efficiently compute whether the cgroup subtree is `populated` without walking all css_sets.
+`bpf` is a `struct cgroup_bpf` that holds BPF programs attached to this cgroup at each of several hook points: `BPF_CGROUP_INET_INGRESS`, `BPF_CGROUP_INET_EGRESS`, `BPF_CGROUP_SOCK_OPS`, `BPF_LSM_CGROUP`, and others. BPF programs attached to a parent cgroup are inherited by all descendants through an "effective program array" mechanism — when a packet arrives at a socket owned by a process in a child cgroup, the kernel runs both the child cgroup's programs and any inherited programs from ancestors.
 
-**`psi` — `struct psi_group`**
+This is the foundation of Cilium's network policy enforcement. When you create a Kubernetes NetworkPolicy, Cilium translates it into BPF programs attached to the `cgroup_bpf` of the relevant pod cgroups. There is no iptables, no netfilter — the policy runs as BPF code directly in the socket path, inspecting packets against the policy and dropping or allowing them before they ever reach the network stack.
 
-Per-cgroup Pressure Stall Information. Tracks how long tasks in this cgroup stall waiting for memory, CPU, or I/O. Each `psi_group` accumulates time-weighted stall percentages. Available via `memory.pressure`, `cpu.pressure`, and `io.pressure` files. Kubernetes uses PSI data to make more accurate eviction decisions and to implement the `MemoryPressure` node condition.
+### Controller Enablement: `subtree_control`, `subtree_ss_mask`
 
-**`bpf` — `struct cgroup_bpf`**
+`subtree_control` is a bitmask of controllers enabled for the children of this cgroup. It is what you write to `cgroup.subtree_control`. Setting the memory bit here means that child cgroups created under this cgroup will have `memory.max`, `memory.current`, `memory.stat`, and the other memory controller files available. The bit does not enable the controller in this cgroup itself — it enables it for the cgroup's children.
 
-Holds BPF programs attached to this cgroup at each hook point (`BPF_CGROUP_INET_INGRESS`, `BPF_CGROUP_SOCK_OPS`, `BPF_LSM_CGROUP`, etc.). BPF programs attached to a parent cgroup are inherited by children via `effective` program arrays. This is the mechanism behind Kubernetes network policy enforcement via Cilium and cgroup-based socket filtering.
+The design follows a delegation principle: you can only enable a controller if the parent cgroup has enabled it for you. The kubelet enables `memory`, `cpu`, `io`, and `pids` on the `kubepods/` cgroup at node startup, which is why every pod cgroup automatically has those controller files. If you create a custom cgroup outside `kubepods/` and forget to enable a controller at each level of the path, the files will simply not appear.
 
-**`subtree_control` — `u16`**
-
-Bitmask of controllers enabled for this cgroup's children. Written by userspace via `cgroup.subtree_control` (e.g., `echo "+memory +cpu" > cgroup.subtree_control`). A controller bit set here means child cgroups of this cgroup will have that controller's files (e.g., `memory.max`) available. The kubelet enables `memory`, `cpu`, `io`, and `pids` controllers on the `kubepods/` directory so all pod cgroups inherit them.
-
-**`subtree_ss_mask` — `u16`**
-
-Bitmask of controllers that have tasks somewhere in this cgroup's subtree. Maintained by the kernel as tasks migrate in and out. Used during controller enable/disable validation — you cannot disable a controller if tasks in the subtree are using it.
+`subtree_ss_mask` is the inverse view: which controllers have tasks *somewhere in this cgroup's subtree*. The kernel maintains this automatically. It prevents you from disabling a controller on a cgroup when tasks inside it are actively using that controller's accounting — doing so would leave those tasks' memory unaccounted, which would be a correctness violation.
 
 ## struct cgroup_root
+
+Each hierarchy — in v2 there is only one — is represented by a `struct cgroup_root`:
 
 ```c
 // include/linux/cgroup-defs.h (simplified)
@@ -167,193 +175,188 @@ struct cgroup_root {
     int                    hierarchy_id;
     struct cgroup          cgrp;        // the root cgroup (embedded, not a pointer)
     atomic_t               nr_cgrps;   // total cgroup count in this hierarchy
-    struct list_head       root_list;  // list of all roots
+    struct list_head       root_list;  // list of all roots (v1 had many; v2 has one)
     unsigned int           flags;      // CGRP_ROOT_* flags
-    char                   name[MAX_CGROUP_ROOT_NAMELEN]; // hierarchy name
+    char                   name[MAX_CGROUP_ROOT_NAMELEN];
 };
 ```
 
-The `cgrp` field is embedded (not a pointer) — the root cgroup is part of the root struct itself. This means `&cgrp_dfl_root.cgrp` is the cgroup v2 root cgroup.
-
-For cgroup v2 there is exactly one `cgroup_root` instance — `cgrp_dfl_root` — defined at the top of `kernel/cgroup/cgroup.c`:
+Notice that `cgrp` is an embedded struct, not a pointer. The root cgroup is physically inside the `cgroup_root`. This means `&cgrp_dfl_root.cgrp` is literally the cgroup v2 root cgroup — no heap allocation required. In the cgroup v2 source, `cgrp_dfl_root` is defined as a file-scope global:
 
 ```c
 // kernel/cgroup/cgroup.c
 struct cgroup_root cgrp_dfl_root = { .cgrp.self.flags = CSS_NO_REF };
 ```
 
-All subsystems active in v2 are attached to this single root. In v1 mode, each controller mount created its own `cgroup_root` instance, and `root_list` linked them all together. The `hierarchy_id` for `cgrp_dfl_root` is always 0.
+The `CSS_NO_REF` flag on the root cgroup's embedded `cgroup_subsys_state` tells the reference-counting machinery never to try to drop a reference on the root — the root cgroup is never freed.
 
-## Lifecycle
+## Lifecycle: Creation, Migration, and Destruction
 
-A cgroup's life follows three phases: creation, use, and destruction.
+A cgroup is born when userspace (or the kubelet) calls `mkdir` on the cgroupfs:
 
 ```
-mkdir /sys/fs/cgroup/mygroup      ->  kernel_mkdir()
-  └─ cgroup_mkdir()               kernel/cgroup/cgroup.c
-       ├─ cgroup_create()         allocates struct cgroup + all subsys states
-       │    ├─ kzalloc(cgroup)
-       │    ├─ kernfs_create_dir() creates the kernfs directory node
-       │    └─ for each controller: css_alloc() + css_online()
-       └─ cgroup_apply_control()  propagate controller inheritance
-
-echo $PID > cgroup.procs          ->  cgroup_procs_write()
-  └─ cgroup_attach_task()
-       └─ cgroup_migrate()        find or create new css_set, swap task->cgroups
-
-rmdir /sys/fs/cgroup/mygroup      ->  cgroup_rmdir()
-  └─ cgroup_destroy_locked()      (only succeeds when cgroup.procs is empty)
-       └─ css_kill_scheduling()   async teardown of subsystem states
-            └─ css_free_rwork_fn() -> kfree(cgrp)
+mkdir /sys/fs/cgroup/kubepods/pod123/
+  └─ kernel_mkdir()
+       └─ cgroup_mkdir()                     # kernel/cgroup/cgroup.c
+            ├─ cgroup_create()
+            │    ├─ kzalloc(sizeof(*cgrp))   # allocate the struct cgroup
+            │    ├─ kernfs_create_dir()      # create the directory entry
+            │    └─ for each active controller:
+            │         css_alloc()            # allocate per-controller state
+            │         css_online()           # make it active
+            └─ cgroup_apply_control()        # propagate controller inheritance
 ```
 
-**Creation** (`cgroup_mkdir`): The kernel allocates a `struct cgroup`, links it into the parent's child list, creates a kernfs directory node for it, and calls each active controller's `css_alloc()` callback to allocate the per-cgroup controller state. Then `css_online()` is called to make the controller state active. If any `css_alloc()` fails, all previously allocated controller states are freed.
+`cgroup_create()` allocates the `struct cgroup`, initializes every field, then walks every controller enabled in the parent's `subtree_control` bitmask and calls that controller's `css_alloc()` callback. For the memory controller this allocates a `struct mem_cgroup`; for the cpu controller it allocates a `struct task_group` with per-CPU scheduling entities. If any `css_alloc()` fails — say, the system is critically low on memory — every previously allocated controller state is freed and the `mkdir` returns an error. There are no partial states left in the tree.
 
-**Task attachment** (`cgroup_procs_write`): Writing a PID to `cgroup.procs` triggers `cgroup_procs_write()`, which resolves the task, acquires `cgroup_mutex`, validates the move (permissions, frozen state, delegation constraints), then calls `cgroup_migrate()`. Migration finds or creates a new `css_set` representing the task's new cgroup membership combination and atomically replaces `task->cgroups` under `css_set_lock` + RCU.
+Once all controller states are allocated, `css_online()` is called on each. This is where controllers register their state with the rest of the kernel — the memory controller sets up per-NUMA memory zone accounting, the CPU controller links the new task group into the CFS scheduler hierarchy. Only after `css_online()` completes for all controllers is the cgroup visible to the task migration machinery.
 
-**Destruction** (`cgroup_rmdir`): `rmdir` only succeeds when the cgroup has no tasks (`cgroup.procs` is empty) and no live descendants. The kernel calls `cgroup_destroy_locked()`, which marks the cgroup offline, schedules asynchronous teardown of each controller's state via `css_kill_scheduling()`, and eventually calls the controller's `css_free()` callback. The `struct cgroup` itself is freed via a work queue item (`css_free_rwork_fn`) after all RCU readers have completed.
+Moving a task into the cgroup requires writing its PID to `cgroup.procs`. This triggers `cgroup_procs_write()`, which calls `cgroup_migrate()` after acquiring `cgroup_mutex`:
+
+```
+write("cgroup.procs", "12345\n")
+  └─ cgroup_procs_write()
+       └─ cgroup_migrate()
+            ├─ subsys->can_attach(tset)    # pre-flight check by each controller
+            ├─ cgroup_migrate_execute()
+            │    └─ task->cgroups = new_css_set  # the atomic pivot
+            └─ subsys->attach(tset)        # post-migration notifications
+```
+
+The `can_attach()` callbacks run before any state is changed. The memory controller uses this hook to perform limit checks: if moving this task into the target cgroup would cause an immediate OOM (because the cgroup is already at `memory.max`), `can_attach()` returns an error and the migration is rejected before anything is modified. This is the right behavior — it is far better to reject a migration than to complete it and immediately OOM kill the task.
+
+The atomic pivot is the `task->cgroups = new_css_set` assignment inside `cgroup_migrate_execute()`. After this point, every memory allocation by this task charges the new cgroup. Every CPU scheduler tick accounts to the new cgroup's CPU quota. The task has, from the kernel's perspective, moved.
+
+Destruction is the reverse, with one important constraint: a cgroup cannot be removed while it has tasks or live descendants. The check is strict:
+
+```
+rmdir /sys/fs/cgroup/pod123/
+  └─ cgroup_rmdir()
+       └─ cgroup_destroy_locked()       # only if nr_tasks==0 and nr_descendants==0
+            ├─ for each controller:
+            │    css_offline()          # mark controller state as dying
+            │    schedule css_free()    # schedule deallocation via work queue
+            └─ kernfs_remove()          # remove the directory entry
+```
+
+The asynchronous teardown via work queue is necessary because of RCU. Other CPUs may hold RCU read locks with references to the old `cgroup_subsys_state` pointers. The controller state cannot be freed until a full RCU grace period has elapsed. Work queues handle this naturally: by the time the work item runs, all previous RCU readers have completed.
 
 ## Locking Discipline
 
-Four synchronization mechanisms protect the cgroup subsystem:
+Four mechanisms protect cgroup data, each guarding a different scope:
 
-**`cgroup_mutex` (mutex)**
+**`cgroup_mutex`** is the global structural lock. It serializes `mkdir`, `rmdir`, controller enable/disable operations, and anything that reshapes the hierarchy. It is a `mutex` (sleeping lock), appropriate because these operations are not on the fast path. The rule is: if you are modifying the tree topology or a cgroup's controller configuration, you hold `cgroup_mutex`.
 
-The top-level lock for structural changes. Held during `cgroup_mkdir()`, `cgroup_rmdir()`, `cgroup_apply_control()` (enabling/disabling controllers), and any operation that changes the hierarchy shape. This is the outer lock — if you need both `cgroup_mutex` and `css_set_lock`, acquire `cgroup_mutex` first.
+**`css_set_lock`** is a spinlock protecting task membership. It serializes writes to `task->cgroups`, modifications to css_set task lists, and changes to `css_set` reference counts. Because it can be acquired from code paths triggered by task exit — which can happen in interrupt context on some architectures — it must be acquired with IRQs disabled (`spin_lock_irq`). This is the lock that makes reading `cgroup.procs` on a busy cgroup measurably expensive: the kernel must hold it for the entire duration of the task list walk.
 
-```c
-// example from kernel/cgroup/cgroup.c
-static int cgroup_mkdir(struct kernfs_node *parent_kn, const char *name, umode_t mode)
-{
-    mutex_lock(&cgroup_mutex);
-    // ... create the cgroup ...
-    mutex_unlock(&cgroup_mutex);
-}
-```
+**RCU** is what makes the common case — "what cgroup is this task in right now?" — essentially free. `task->cgroups` is an RCU-protected pointer. Any code that needs to read a task's cgroup simply calls `rcu_read_lock()` and `rcu_dereference(task->cgroups)`. No cache-line bouncing, no blocking, no contention. The write side (task migration) holds `css_set_lock`, does the swap with `rcu_assign_pointer()`, and waits for a grace period before freeing the old css_set. The asymmetry is intentional: reads are a billion-times-more-common than writes, so the read path must be the one that pays zero overhead.
 
-**`css_set_lock` (spinlock)**
-
-Protects all `css_set` membership data: the `task_struct->cgroups` pointer, `css_set->tasks` list, and `css_set` reference counts. Held during task migration and when walking tasks in a cgroup. Must be acquired with IRQs disabled (`spin_lock_irq`) because it can be taken from interrupt context during task death.
-
-**`kernfs_mutex` (mutex, inside kernfs)**
-
-Protects kernfs directory entries and their lifecycle. Mostly an internal kernfs concern — cgroup code doesn't acquire it directly, but `cgroup_mkdir()` calls `kernfs_create_dir()` which acquires it internally. The ordering constraint: `cgroup_mutex` -> `kernfs_mutex`.
-
-**RCU (read-copy-update)**
-
-`task_struct->cgroups` is RCU-protected. This means:
-- **Readers** (e.g., code looking up a task's cgroup) use `rcu_read_lock()` + `rcu_dereference(task->cgroups)` — zero overhead, no cache line bounce.
-- **Writers** (task migration) hold `css_set_lock`, do the pointer swap with `rcu_assign_pointer()`, then call `css_set_put()` on the old `css_set` after a grace period.
-
-This design allows the extremely hot path of "what cgroup is this task in?" to be lock-free.
+**`kernfs_rwsem`** (inside kernfs) protects the directory entries and the lifetime of kernfs nodes. It is largely an internal kernfs concern — cgroup code calls `kernfs_create_dir()` and `kernfs_remove()` which acquire it internally. The ordering constraint matters: `cgroup_mutex` must always be acquired before `kernfs_rwsem` if both are needed. Inverting this order causes deadlocks; the kernel's lockdep annotations encode this constraint and will warn if it is violated.
 
 ## Object Graph
 
-The kernel maintains a web of cross-references between tasks, css_sets, controller states, and cgroups:
+The full data structure graph, from a Kubernetes pod perspective:
 
 ```
-task_struct
-  └─ cgroups ──────────────────────────────► struct css_set
-                                               ├─ subsys[0] ──► struct mem_cgroup (CSS)
-                                               │                    └─ cgroup ──────► struct cgroup
-                                               │                                          └─ subsys[0] (same mem_cgroup)
-                                               ├─ subsys[1] ──► struct task_group (CSS, for cpu)
-                                               │                    └─ cgroup ──────► struct cgroup
-                                               └─ subsys[N] ──► struct pids_cgroup (CSS)
-                                                                    └─ cgroup ──────► struct cgroup
+task_struct (container process)
+  └─ cgroups ──────────────────────────► struct css_set
+         (RCU ptr, one per task)             │
+                                             ├─ subsys[memory_cgrp_id] ──► struct mem_cgroup
+                                             │                                 └─ css.cgroup ──► struct cgroup
+                                             │                                                        (pod memory cgroup)
+                                             │                                 └─ memory.max = 256 MiB
+                                             │
+                                             ├─ subsys[cpu_cgrp_id] ──────► struct task_group
+                                             │                                 └─ css.cgroup ──► struct cgroup
+                                             │                                                        (same pod cgroup)
+                                             │                                 └─ cfs_bandwidth.quota = 50000 µs
+                                             │
+                                             └─ subsys[pids_cgrp_id] ────► struct pids_cgroup
+                                                                              └─ css.cgroup ──► struct cgroup
+                                                                              └─ limit = 100 pids
 ```
 
-The key insight is `struct cgroup_subsys_state` (abbreviated `css`). Every controller-specific struct begins with an embedded `css`:
+The critical pattern is `struct cgroup_subsys_state` — the common header that appears at offset 0 in every controller-specific struct:
 
 ```c
-struct mem_cgroup {
-    struct cgroup_subsys_state css;   // MUST be first
-    // ... memory controller fields ...
+struct cgroup_subsys_state {
+    struct cgroup        *cgroup;   // back-pointer to the cgroup
+    struct cgroup_subsys *ss;       // which controller this belongs to
+    struct percpu_ref     refcnt;   // reference count
+    unsigned long         flags;    // CSS_NO_REF, CSS_ONLINE, CSS_DYING, CSS_DEAD
+    struct cgroup_subsys_state *parent; // parent's css for this controller
 };
 
-struct cgroup_subsys_state {
-    struct cgroup        *cgroup;     // back-pointer to the cgroup
-    struct cgroup_subsys *ss;         // which controller this belongs to
-    struct percpu_ref     refcnt;     // reference count
-    // ...
+struct mem_cgroup {
+    struct cgroup_subsys_state css;  // MUST be first — enables the cast
+    // ... memory controller fields ...
 };
 ```
 
-Because `css` is always first, a `struct cgroup_subsys_state *` pointer can be safely cast to/from `struct mem_cgroup *` using `container_of`. This is how `cgroup->subsys[mem_cgroup_id]` returns a `struct cgroup_subsys_state *` that is really the start of a `struct mem_cgroup`.
+Because `css` is first, a `struct cgroup_subsys_state *` that points to a `mem_cgroup` can be safely cast to `struct mem_cgroup *` using `container_of`. This single-inheritance-by-embedding pattern appears throughout the kernel. It gives the cgroup core a uniform interface — it deals only in `struct cgroup_subsys_state *` — while letting each controller add whatever fields it needs.
 
-A `css_set` represents a unique combination of (memory cgroup, cpu cgroup, pids cgroup, ...) that a set of tasks shares. Multiple tasks with identical cgroup membership share a single `css_set`, reducing memory overhead. When one task moves to a different cgroup, it gets a new `css_set` (potentially shared with other tasks that already have that combination).
+The css_set is the deduplication key: if 50 containers on a node all have the same memory limit and cpu quota, they may share one css_set (50 tasks, refcount=50) that points to the same `mem_cgroup` and `task_group`. When one of those containers gets a different CPU limit, its tasks get a new css_set pointing to a new `task_group`, while the shared `mem_cgroup` remains. This sharing is invisible to userspace but has a real effect on kernel memory usage at node scale.
 
 ## Live Observation
 
 ```bash
-# Find a process's cgroup path
+# Find a process's cgroup path (v2 shows one line: "0::<path>")
 cat /proc/$PID/cgroup
-# Output for cgroup v2: "0::<path>"
-# Example: 0::/kubepods/besteffort/pod6abc1234-.../abc123container...
 
-# Navigate to the cgroup directory
+# Navigate to the cgroup
 CGROUP=$(cat /proc/$PID/cgroup | sed 's/0:://')
 ls /sys/fs/cgroup$CGROUP
 
-# Read a cgroup's unique ID
+# Read the cgroup's kernel-assigned unique ID
 cat /sys/fs/cgroup$CGROUP/cgroup.id
 
-# List all processes in a cgroup (not recursive)
+# List all processes directly in this cgroup
 cat /sys/fs/cgroup$CGROUP/cgroup.procs
 
 # List all processes including descendants
 find /sys/fs/cgroup$CGROUP -name cgroup.procs -exec cat {} +
 
-# See which controllers are available at the root
+# Which controllers are available at the root
 cat /sys/fs/cgroup/cgroup.controllers
-# Example output: cpuset cpu io memory hugetlb pids rdma misc
+# Example: cpuset cpu io memory hugetlb pids rdma misc
 
-# See which controllers are enabled in a specific cgroup's children
+# Which controllers are enabled for children of this cgroup
 cat /sys/fs/cgroup$CGROUP/cgroup.subtree_control
 
-# Check memory usage and limits
-cat /sys/fs/cgroup$CGROUP/memory.current   # current usage in bytes
-cat /sys/fs/cgroup$CGROUP/memory.max       # limit ("max" means unlimited)
-cat /sys/fs/cgroup$CGROUP/memory.stat      # detailed breakdown
+# Memory usage and limits
+cat /sys/fs/cgroup$CGROUP/memory.current   # bytes in use right now
+cat /sys/fs/cgroup$CGROUP/memory.max       # hard limit ("max" = unlimited)
+cat /sys/fs/cgroup$CGROUP/memory.stat      # anon, file, kernel, slab breakdown
 
-# Check CPU quota
-cat /sys/fs/cgroup$CGROUP/cpu.max
-# Output format: "<quota_us> <period_us>"
-# Example: "100000 100000" means 100% of one CPU per 100ms period
-# Example: "max 100000" means no limit
+# Check CPU quota and throttling
+cat /sys/fs/cgroup$CGROUP/cpu.max          # "<quota_us> <period_us>"
+cat /sys/fs/cgroup$CGROUP/cpu.stat         # nr_throttled tells you if it's hitting limits
 
-# Check CPU throttling statistics
-cat /sys/fs/cgroup$CGROUP/cpu.stat
-# Key fields: usage_usec, user_usec, system_usec, nr_periods, nr_throttled, throttled_usec
+# PSI pressure — per-cgroup stall percentages
+cat /sys/fs/cgroup$CGROUP/memory.pressure  # some/full, 10s/60s/300s averages
 
-# Read PSI (Pressure Stall Information) for memory
-cat /sys/fs/cgroup$CGROUP/memory.pressure
-
-# Tree view using systemd tooling
+# Tree view
 systemd-cgls
-systemd-cgls /kubepods.slice    # scoped to pod cgroups
+systemd-cgls /kubepods.slice    # scoped to Kubernetes pod cgroups
 
-# Tree view without systemd
-find /sys/fs/cgroup -maxdepth 4 -name cgroup.procs | sort
-
-# bpftrace: trace cgroup creation (every mkdir on cgroupfs)
+# bpftrace: trace every cgroup creation (every mkdir on cgroupfs)
 bpftrace -e 'kprobe:cgroup_mkdir {
     printf("pid=%d comm=%s creating new cgroup\n", pid, comm);
 }'
 
-# bpftrace: trace process migration between cgroups
+# bpftrace: trace task migration between cgroups
 bpftrace -e 'kprobe:cgroup_migrate_finish {
-    printf("pid=%d comm=%s migrated to new cgroup\n", pid, comm);
+    printf("pid=%d comm=%s completed cgroup migration\n", pid, comm);
 }'
 
 # bpftrace: trace OOM kills within cgroups
 bpftrace -e 'kprobe:mem_cgroup_out_of_memory {
-    printf("OOM kill triggered: pid=%d comm=%s\n", pid, comm);
+    printf("OOM kill: pid=%d comm=%s\n", pid, comm);
 }'
 
-# bpftrace: print cgroup ID for every fork
+# bpftrace: observe the cgroup ID on every fork (matches bpf_get_current_cgroup_id())
 bpftrace -e 'tracepoint:sched:sched_process_fork {
-    printf("fork: parent_pid=%d child_pid=%d cgroup_id=%llu\n",
+    printf("fork: parent=%d child=%d cgroup_id=%llu\n",
         args->parent_pid, args->child_pid, cgroup_id);
 }'
 ```
