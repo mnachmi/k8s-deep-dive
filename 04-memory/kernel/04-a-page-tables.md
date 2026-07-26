@@ -1,4 +1,14 @@
-# Page Tables — Linux Virtual Memory Deep Dive
+# 04-a — Page Tables: Linux Virtual Memory Deep Dive
+
+## The Memory Illusion
+
+Every process running on a modern Linux system believes it has gigabytes of contiguous memory, starting at address zero. This is a lie maintained by the hardware and the kernel together. Physical memory is shared, fragmented, partially on disk, and addressed in physical page frames that bear no relation to the virtual addresses processes use. The translation between "what the process thinks it has" and "what hardware actually knows about" happens in the page table.
+
+The page table is not a kernel data structure in the traditional sense. It is a hardware-understood data structure that the kernel writes and the CPU's Memory Management Unit reads directly — without kernel involvement — on every memory access. When a process loads from address `0x7ffe3c4a0018`, the MMU walks the page table that `CR3` points to, finds the mapping for that virtual page, and reads from the physical frame it maps to. If there is no mapping — because the page was never faulted in, or was swapped out, or was written with wrong permissions — the MMU raises a page fault exception and the kernel's fault handler takes over.
+
+The fault handler is where the interesting work happens. It is where copy-on-write is implemented (fork creates shared mappings marked read-only; the first write triggers a fault that copies the page). It is where demand paging happens (the kernel allocates physical pages lazily when they are actually touched, not when mmap() is called). It is where memory cgroup charging happens for containers (each container's page faults increment a counter in its cgroup's memory controller). Understanding page tables means understanding where containers actually spend their memory and why `kubectl describe pod` shows different numbers from what `free` says inside the container.
+
+This document covers `struct mm_struct` (the per-process address space), `struct vm_area_struct` (a contiguous virtual memory region), the four-level page table hierarchy (PGD → P4D → PUD → PMD → PTE), and the page fault handler that ties them together.
 
 ## Source Locations
 

@@ -1,4 +1,14 @@
-# OOM Killer and PSI Pressure Stall Information — Linux Memory Internals
+# 04-c — OOM Killer and PSI: Reading Memory Pressure
+
+## When Memory Runs Out
+
+Memory pressure in Linux kills containers in two distinct ways, and most operators only know about one of them.
+
+The well-known way is the **OOM kill**: the cgroup's memory limit is exhausted, a `try_charge()` call in the memory controller fails to find available memory after reclaim, and the kernel invokes `mem_cgroup_out_of_memory()`. It selects a process based on the `oom_score_adj` + memory usage heuristic, sends it `SIGKILL`, and waits for the pages to return. Kubernetes sees this as a container exiting with `OOMKilled` reason and `exit code 137`. The fix looks obvious: raise the memory limit.
+
+The subtler way is **PSI (Pressure Stall Information)**: the kernel measures the fraction of time that tasks are stalled waiting for memory — not yet killed, but unable to make progress because page reclaim cannot keep up with demand. A container might be alive, responsive to health checks, and within its memory limit while secretly spending 20% of its wall-clock time stalled in `direct reclaim`. PSI surfaces this. Kubernetes 1.22+ uses PSI data to improve eviction decisions, preferring to evict pods that are causing pressure before they trigger OOM kills.
+
+The OOM killer and PSI together answer the two questions about memory: "did this container die because of memory?" and "is this container about to die because of memory?" Both require understanding the kernel's memory pressure infrastructure.
 
 ## Source Locations
 

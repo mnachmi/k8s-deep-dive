@@ -1,5 +1,13 @@
 # Kubernetes Memory — Kernel Connection
 
+## Why Memory in Kubernetes Is Harder Than It Looks
+
+Kubernetes exposes memory as a simple knob: `requests.memory` and `limits.memory`. Set 256Mi, get 256Mi. But this simplicity is an abstraction over a memory management system that took three decades to build, and the gaps between the abstraction and the reality are where production incidents happen.
+
+`limits.memory: 256Mi` does not reserve 256MB of physical RAM. It writes `268435456` to `memory.max` in the container's cgroup directory and lets the kernel enforce it lazily. Memory is not allocated until accessed. The kernel charges pages to the cgroup when they are faulted in, not when the container starts. A container that requests 256Mi but only touches 50MB will consume 50MB of RSS. A container that requests 256Mi but has a memory leak that reaches 256MB will trigger `mem_cgroup_out_of_memory()` — the cgroup OOM killer — not a Kubernetes eviction event. The OOM kill happens in the page fault handler, before kubelet has any opportunity to intervene.
+
+`requests.memory` is even more misunderstood. It controls scheduling — the scheduler uses it to find a node with enough available memory — but it does not create a kernel-enforced floor. A Burstable pod with `requests.memory: 128Mi` and `limits.memory: 256Mi` might be running on a node under memory pressure with only 64MB of actual available memory. The kernel will start reclaiming from it immediately. The only protection against this is `memory.min` (the kernel-enforced reservation for Guaranteed pods), and most operators do not realize that `requests == limits` is the condition that activates it.
+
 This document maps every Kubernetes memory construct to the kernel mechanisms covered in `04-memory/kernel/`. The goal is to make each K8s knob traceable to the exact kernel data structure that enforces it.
 
 ---

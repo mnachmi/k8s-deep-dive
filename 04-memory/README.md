@@ -1,5 +1,9 @@
 # Chapter 04 — Memory Management
 
+Every developer who has run a containerized workload in production has encountered the OOM kill: a container that was running fine yesterday terminates with `OOMKilled`, the application restarts, and Kubernetes records a restart count increment. What actually happened is this: a process inside the container called `malloc()`, which triggered `brk(2)` or `mmap(2)`, which called the kernel's `handle_mm_fault()`, which tried to allocate a page through `try_charge()` on the cgroup's memory controller, found that the charged amount exceeded `memory.max`, tried to reclaim pages via LRU scanning, found insufficient reclaimable pages, and called `mem_cgroup_out_of_memory()`, which selected the highest `oom_score_adj` process and sent it `SIGKILL`. The application saw nothing — the signal arrived before any userspace code ran. The container appeared to have crashed spontaneously.
+
+Understanding why this happens — and why increasing `requests.memory` does not always prevent it, and why `limits.memory` does not reserve physical RAM, and why a container can be OOM killed even when the node has free memory — requires understanding how Linux manages physical and virtual memory. The page table hierarchy, the buddy allocator, the SLUB slab allocator, the page cache, the LRU reclaim algorithm, and the PSI pressure tracking system are not optional background knowledge. They are the mechanisms that determine what happens when a container runs.
+
 Linux memory management is the largest kernel subsystem. Every container's memory isolation, every OOM kill, every HugePage allocation passes through it. Kubernetes's eviction manager, resource limits, and Topology Manager are all thin wrappers over kernel memory primitives. This chapter teaches the kernel implementation bottom-up: from physical pages to virtual address spaces to pressure metrics.
 
 ## Learning Objectives

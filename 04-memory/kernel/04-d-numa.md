@@ -1,5 +1,15 @@
 # NUMA — Non-Uniform Memory Access: Linux Kernel Internals
 
+## The Topology Beneath the Abstraction
+
+For most of computing history, programmers treated memory as a flat array. A pointer was a pointer; reading from address 0x1000 took the same time as reading from address 0x1000000. This model was true for decades, and then it became a convenient lie.
+
+Multi-socket server hardware broke it. When AMD introduced the HyperTransport interconnect with the Opteron in 2003 and Intel followed with the QuickPath Interconnect in the Nehalem architecture in 2008, they eliminated the shared memory bus that had constrained single-socket performance. Each processor now had its own memory controller, attached to its own bank of DRAM. A processor could reach its local memory in 60-80 nanoseconds. Reaching memory attached to a different socket required crossing the inter-socket interconnect — 120-200 nanoseconds. The same physical address could take twice as long to access depending on which CPU was doing the asking.
+
+The Linux kernel had to model this topology. The data structure is `struct pglist_data` — one instance per NUMA node — containing `struct zone` arrays for DMA, Normal, and Highmem regions. The allocator tries to satisfy requests from the calling CPU's local node first; when local memory is exhausted or the task's memory policy says otherwise, it falls over to remote nodes and pays the latency penalty. The policy interface — `mbind(2)`, `set_mempolicy(2)`, `move_pages(2)` — gives userspace control over which nodes memory comes from and where existing allocations migrate.
+
+For Kubernetes, NUMA topology is the difference between a latency-sensitive pod running at 1ms tail latency and 3ms tail latency on identical hardware. The CPU Manager and Topology Manager features in kubelet exist precisely to co-locate a pod's CPUs and memory on the same NUMA node, eliminating cross-socket penalty. A pod scheduled without topology awareness may interleave its memory across nodes, running each memory access through the interconnect — invisible in CPU utilization metrics but devastating in application latency measurements.
+
 ## Source Locations
 
 | File | Link | Contents |

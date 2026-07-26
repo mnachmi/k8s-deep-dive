@@ -1,4 +1,16 @@
-# Physical Page Allocator, Slab, and LRU — Linux Memory Internals
+# 04-b — Physical Page Allocator, Slab, and LRU: Linux Memory Internals
+
+## Three Layers, One Allocation
+
+When code in the kernel needs memory, it does not call `malloc()`. There is no `malloc()` in the kernel. Instead, there is a three-layer allocator hierarchy, each layer optimized for a different allocation size and lifetime pattern.
+
+At the bottom is the **buddy allocator**: a page-granular allocator that manages physical memory in power-of-two-sized blocks. It can allocate 1, 2, 4, 8, ... 1024 contiguous physical pages. It is the foundation. Everything else builds on it.
+
+Above the buddy allocator is the **slab allocator** (specifically SLUB in most Linux configurations since 2.6.22). The kernel allocates millions of small, fixed-size objects per second — `task_struct`, `inode`, `dentry`, `sk_buff`, `struct pid`. Allocating a full page (4 KB) for each 9 KB `task_struct` would waste enormous amounts of memory; allocating directly from `kmalloc()` for a 64-byte `sk_buff` would fragment the buddy allocator. The slab allocator solves this by carving pages from the buddy allocator into per-type caches and managing object allocation within those caches efficiently. It also provides per-CPU caches that allow object allocation without taking any lock in the common case.
+
+Above the slab allocator is the **page cache and LRU**: the mechanism that turns Linux into an effective caching server. When you read a file, the kernel allocates pages from the buddy allocator, reads the file data into those pages, and puts them in the page cache. Subsequent reads find the data there without hitting disk. When memory runs low, the LRU (Least Recently Used) scanner reclaims pages starting with those least recently accessed. The boundary between "used memory" and "reclaimable cache" is what makes `free` output confusing — the "available" column accounts for this reclaim budget.
+
+For Kubernetes operators: the OOM kill you see when a container exceeds its memory limit is not triggered by the container allocating too much in `malloc()`. It is triggered by the kernel's memory controller accounting pages through `try_charge()` during page fault handling. The memory counted against the container includes anonymous pages (heap/stack), file-backed pages (read/write/mmap), and shmem/tmpfs pages — all tracked at the cgroup level using per-page `mem_cgroup` accounting that traces back to the buddy allocator pages these objects live on.
 
 ## Source Locations
 
