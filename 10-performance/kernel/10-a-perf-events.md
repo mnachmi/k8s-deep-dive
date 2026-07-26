@@ -1,4 +1,12 @@
-# 10-a — `perf_event_open`, `struct perf_event`, Hardware PMU Counters
+# 10-a — `perf_event_open`, `struct perf_event`, and Hardware PMU Counters
+
+## Measuring What Actually Happens
+
+Profiling a program on a modern system is hard. The processor executes instructions out of order, speculatively, across multiple cores. A program that appears to spend 30ms in `malloc()` according to `strace` might actually be stalling in the L3 cache. A pod that reports 100% CPU usage in Kubernetes metrics might be spending half that time waiting for memory bandwidth. The nanosecond-accurate numbers that userspace profilers produce measure elapsed time — they cannot tell you *why* the time is being spent.
+
+Hardware Performance Monitoring Units (PMUs) can. Every modern CPU has a set of performance counters — hardware registers that count specific micro-architectural events: instruction retirements, branch mispredictions, cache misses, TLB misses, memory bandwidth consumed, cycles spent stalled waiting for data from DRAM. These counters measure what the CPU physically does, independent of the clock. If a function takes twice as long as expected because of cache misses, the cache miss counter will tell you exactly how many misses occurred.
+
+The Linux perf subsystem, introduced in 2009, exposes hardware PMU counters through a unified kernel interface. The `perf_event_open(2)` syscall creates a file descriptor that monitors either a specific process or a specific CPU for a specific event. The `perf` command-line tool, bpftrace, and profilers like flamegraph generators all use this interface. For Kubernetes, it is the foundation for identifying which pods are causing cache pollution on shared nodes, for understanding why latency spikes correlate with specific CPU-level events, and for capacity planning based on actual resource consumption rather than requested limits.
 
 ## 1. Source Locations
 

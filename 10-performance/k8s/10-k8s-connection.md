@@ -1,5 +1,13 @@
 # Chapter 10 — Performance: Kubernetes Connection
 
+## Performance Signals Live in the Kernel
+
+Every performance metric that Prometheus scrapes from Kubernetes is a derived representation of a kernel counter. The container's CPU usage is computed from `cpuacct.usage` (or `cpu.stat` in cgroup v2). The memory usage is `memory.current`. The network bytes are aggregated from per-interface counters in the network namespace. The I/O throughput is `io.stat`. These Prometheus metrics are useful for dashboards and alerting, but they are aggregated, delayed, and transformed. When a performance problem is actively affecting users, the kernel counters are faster and more authoritative.
+
+The performance investigation that starts with a Prometheus query typically ends with a kernel interface. High CPU utilization points to `cpu.stat` for throttle rate. High p99 latency with low CPU points to `schedstat` for wait time. Memory pressure without OOM kills points to `/proc/pressure/memory` for PSI values. Cache miss-driven slowness points to `perf stat -e cache-misses` for PMU counters. Network throughput degradation points to `ss -t -e` for TCP socket state and retransmit counters.
+
+The sections below map each category of Kubernetes performance problem to its kernel signal and to the specific tool and file that provides the data. The goal is to cut the investigation path — from Prometheus anomaly to root cause — from hours to minutes.
+
 ## 1. Architecture Overview
 
 | Performance Problem | Kernel Signal | K8s Interface |

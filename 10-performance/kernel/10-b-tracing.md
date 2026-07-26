@@ -1,5 +1,15 @@
 # 10-b — ftrace, Tracepoints, `struct trace_event_call`, Ring Buffer
 
+## Seeing Inside the Running Kernel
+
+Before the Linux tracing infrastructure existed, observing the kernel from userspace was genuinely hostile. You could read `/proc/interrupts` or `/proc/slabinfo` to see aggregated counters, but you could not answer "what function calls is the kernel making right now for this process?" without either inserting printk statements and recompiling, or attaching GDB to a kernel built with KGDB support. Neither was practical for production systems.
+
+Ingo Molnár's ftrace framework, merged in Linux 2.6.27 (2008), changed this. ftrace compiled function-level tracing hooks into the kernel using the `-pg` GCC flag, which inserts a `mcount()` call at the entry of every function. These calls are initially patched with NOP instructions — no overhead in steady state — and can be activated at runtime through a debugfs interface at `/sys/kernel/debug/tracing/`. Enabling function tracing for a specific kernel function, or a function and all its callees, became a matter of writing to a file. No recompile. No reboot.
+
+The tracepoint infrastructure (Mathieu Desnoyers, Linux 2.6.28) complemented ftrace by adding stable, explicitly-placed trace hooks at semantically meaningful locations in kernel code. Where ftrace instruments arbitrary function calls, tracepoints instrument events: a process scheduling in, a page fault occurring, an IRQ firing. Tracepoints have stable ABIs — the kernel team commits to maintaining their argument types across versions — making them reliable targets for long-lived tracing tools. The `TRACE_EVENT()` macro generates both the tracepoint hook and the format descriptor that tools use to decode the binary event data.
+
+The ring buffer is the performance mechanism underneath both ftrace and tracepoints. Kernel events write into a per-CPU ring buffer — a fixed-size circular buffer that overwrites the oldest data when full. Userspace reads the buffer by consuming from the tail. At high event rates, the ring buffer loses events gracefully rather than blocking the kernel's event path. This is the same buffer that bpftrace, Perf, and LTTng all consume; they differ in how they attach to events and what they do with the data, but the kernel side — the per-CPU ring buffer populated by tracepoints — is shared infrastructure.
+
 ## 1. Source Locations
 
 | File | Key Symbols | URL |

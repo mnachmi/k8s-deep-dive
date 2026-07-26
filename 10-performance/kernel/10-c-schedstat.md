@@ -1,5 +1,15 @@
 # 10-c — Scheduler Latency Accounting: `struct sched_statistics`, `/proc/schedstat`, `cpu.stat` Throttle
 
+## The Invisible Tax on Containerized Workloads
+
+CPU throttling in Kubernetes is silent by default. A container configured with `limits.cpu: 100m` can spend 80% of its time frozen — paused by the CFS bandwidth controller for having exhausted its quota — and the application will observe this as mysterious latency spikes with no corresponding CPU usage. `kubectl top pod` will show low CPU utilization because the pod is not using CPU; it is waiting for its next scheduling period. The container is both CPU-limited and CPU-starved simultaneously.
+
+The kernel has always tracked how long tasks wait to be scheduled, how long they actually run, and how often they are preempted. This accounting lives in `struct sched_statistics`, embedded in each `struct task_struct` when `CONFIG_SCHEDSTATS` is enabled, and aggregated across the entire CFS hierarchy in `/proc/schedstat`. The problem is that this data is not surfaced to operators by default. For years, cloud engineers diagnosed throttling by calculating metrics from raw `cpu.stat` counters that required shell arithmetic to interpret.
+
+The cgroup v2 `cpu.stat` file is the operator-facing window into this accounting. It exposes per-cgroup values for `nr_periods` (total CFS scheduling periods elapsed), `nr_throttled` (periods where the cgroup exhausted its quota), and `throttled_usec` (total microseconds the cgroup was paused waiting for quota reset). Dividing `nr_throttled` by `nr_periods` gives the throttle rate. A throttle rate above 10% for a latency-sensitive service is typically a symptom worth investigating — either the CPU limit is too aggressive, or the service needs to be restructured to do less work per request.
+
+Kubernetes 1.25 added the `ThrottlingPercent` metric to the Kubelet metrics API, exposing this exact calculation. Tools like Grafana dashboards that monitor `container_cpu_cfs_throttled_seconds_total` are reading the same data from a different interface. The ground truth is always the raw `cpu.stat` file in the pod's cgroup directory — reading it directly bypasses all metric collection latency and gives you the current throttle count at the moment you ask.
+
 ## 1. Source Locations
 
 | File | Key Symbols | URL |
