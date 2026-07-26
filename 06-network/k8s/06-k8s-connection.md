@@ -1,5 +1,11 @@
 # 06-k8s — Kubernetes Networking: How Pods and Services Connect
 
+## The Gap Between Service and Socket
+
+When a pod sends a request to `http://my-service:8080`, a remarkable amount happens before the TCP SYN packet reaches its destination. The DNS lookup resolves `my-service` to a ClusterIP. The socket sends the packet to that IP. The kernel's Netfilter hook intercepts it at the `OUTPUT` chain, finds the DNAT rule that kube-proxy wrote, and rewrites the destination from the ClusterIP to one of the backing pod IPs. conntrack records the translation so the return packet can be un-translated. The packet travels through a veth pair, across a network bridge or eBPF redirect, and arrives at the destination pod's eth0. None of this is visible to the application. The application called `connect()` to a stable ClusterIP and got a connection to a specific pod.
+
+Understanding this chain matters operationally because failures can occur at any layer. A service that is unreachable might have no iptables rules (kube-proxy fell behind), a wrong DNAT target (endpoint not yet propagated), a conntrack table overflow (too many connections on a busy node), or a missing veth interface (CNI plugin failure). Each of these manifests identically to the application — connection refused or timeout — but requires a different tool and a different place to look. The engineers who debug these fastest are the ones who can walk the packet path in their head and know which kernel interface to check at each step.
+
 Kubernetes networking is built entirely on Linux kernel primitives: network namespaces, veth pairs, bridges, routing tables, Netfilter, conntrack, and (optionally) eBPF. This document traces the complete path a packet takes from one pod to a Service and back, and explains how each Kubernetes networking concept maps to a specific kernel mechanism.
 
 ---

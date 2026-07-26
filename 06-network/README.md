@@ -1,5 +1,9 @@
 # Chapter 06 — Networking
 
+A service that works perfectly on a developer's laptop fails when deployed to Kubernetes with a `connection refused` error that appears intermittently, only under load, and resolves itself after a few seconds. The application team says the server logs never received the requests. The platform team says the pods are running and healthy. Both are correct. The packets are being dropped by conntrack table overflow on the node — a condition visible only to someone who knows to look at `/proc/sys/net/netfilter/nf_conntrack_count` and compare it to `nf_conntrack_max`. From outside the kernel, this failure is invisible.
+
+This scenario represents a category of Kubernetes networking problems that cannot be diagnosed without understanding the Linux kernel network stack. Pod-to-pod connectivity failures, Service DNS resolution working but connection refused, NetworkPolicy appearing to block traffic it should allow, intermittent connection resets under high throughput — these are kernel-level events dressed in Kubernetes clothing. The abstractions are useful until they fail, and when they fail, the kernel is where the failure actually happened.
+
 Every packet entering or leaving a Kubernetes pod passes through the Linux kernel networking stack. A single HTTP request from a pod crosses multiple layers: the container's veth pair, the host bridge or routing table, iptables NAT rules set by kube-proxy, and the physical NIC. This chapter teaches the kernel networking stack from the core data structures (sk_buff, struct sock, struct net) through Netfilter to how Kubernetes assembles pod networks using CNI plugins, iptables DNAT, and conntrack. The same mechanisms power NetworkPolicy enforcement, pod-to-pod routing, and the ServiceIP abstraction.
 
 ## Learning Objectives

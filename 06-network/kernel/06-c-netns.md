@@ -1,5 +1,15 @@
 # 06-C: Network Namespaces and veth Pairs — Container Network Isolation
 
+## The Problem of Shared Network State
+
+In the original Unix model, the network stack was global. Every process on the machine shared the same interfaces, the same routing table, and the same port namespace. If process A bound to port 80, no other process could bind to port 80. If a process called `sysctl -w net.ipv4.tcp_rmem=...`, it changed the buffer size for every TCP connection on the machine. This made perfect sense in 1971 when a Unix system was a single, trusted, time-sharing machine. It made containers impossible.
+
+The fundamental problem with containers is not resource isolation — cgroups solve that. The problem is that two containers running nginx on port 80 cannot coexist on the same network stack. They would collide in the port binding table. And beyond port collisions, a container should not be able to reach the host's routing table, inspect the host's conntrack entries, or change network-wide sysctl values that affect other tenants.
+
+Network namespaces (added to Linux 2.6.24 in January 2008, the culmination of several years of incremental namespace work) gave each process its own private network stack. Clone with `CLONE_NEWNET` and the new process has its own routing table, its own conntrack table, its own set of network interfaces, its own iptables rules, and its own sysctl namespace for all `net.*` variables. It starts with nothing — not even a loopback interface — and must be explicitly wired up to the outside world.
+
+veth pairs are that wiring. A veth pair is a virtual Ethernet cable: two network interfaces bound together in the kernel such that whatever is sent into one end comes out the other. When the container runtime creates a pod, it creates a veth pair, moves one end into the pod's network namespace (renaming it `eth0`), and leaves the other end on the host. The CNI plugin — Flannel, Calico, Cilium — then connects that host-side veth end to the cluster network, whether through a bridge, BGP routes, or eBPF redirect maps. The pod sees a clean network with just its eth0. The host sees a veth interface for each pod. The kernel routes between them at full software speed.
+
 Network namespaces are the kernel mechanism that gives every pod its own private view of the network stack: its own interfaces, routing table, conntrack table, and sysctl settings. veth pairs are the wires that connect those isolated stacks back to the host.
 
 ---

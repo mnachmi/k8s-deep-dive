@@ -1,5 +1,15 @@
 # 06-d — Netfilter, conntrack, and kube-proxy packet filtering
 
+## The History of Linux Packet Filtering
+
+Linux has had kernel-level packet filtering since 1994. The first implementation was `ipfwadm` — a port of BSD's packet filter. In 1998, `ipchains` replaced it with a chain-based model. In 1999, Rusty Russell introduced Netfilter and its userspace interface `iptables`, which replaced ipchains in Linux 2.4.0 (2001). Each generation addressed limitations of the previous: ipfwadm had no stateful tracking; ipchains had it but the architecture was rigid; Netfilter was designed as a general-purpose hook framework that could support any packet-processing module.
+
+The Netfilter design is a set of five hooks embedded in the network stack: `PREROUTING` (packets just arrived from the network), `INPUT` (packets destined for local processes), `FORWARD` (packets being routed through), `OUTPUT` (packets from local processes), and `POSTROUTING` (packets about to leave). Kernel modules register handler functions at these hooks. iptables rules are just one consumer; connection tracking, NAT, and IPVS are others. The hooks guarantee that every packet passes through the registered handlers in priority order, regardless of which protocol it carries.
+
+Connection tracking (`conntrack`) is the module that makes stateful firewalling and NAT possible. It watches every new connection and records it in a hash table — source IP, source port, destination IP, destination port, protocol. When the return packet arrives, conntrack matches it to the existing connection entry and applies the NAT translation in reverse. Without conntrack, DNAT (Destination NAT) would be one-way: the outbound packet would reach the service, but the reply would have no way to find its way back to the original client. conntrack makes the NAT transparent.
+
+For Kubernetes, this matters enormously. kube-proxy in iptables mode programs thousands of DNAT rules — one per Service endpoint — that redirect traffic from ClusterIP:port to a specific pod IP. Every request that hits a Kubernetes Service is DNAT'd by Netfilter. Every response is un-DNAT'd by conntrack. On a cluster with 10,000 Services, the iptables ruleset can contain 40,000+ rules, and every packet traverses the full chain linearly. This is why large clusters migrate to kube-proxy IPVS mode (which uses a hash table instead of linear rule chains) or to Cilium (which bypasses Netfilter entirely using eBPF).
+
 Netfilter is the Linux kernel framework that intercepts packets at well-defined points in the network stack. It is the foundation for iptables, nftables, connection tracking (conntrack), NAT, and IPVS. In Kubernetes, kube-proxy (iptables mode) programs Netfilter rules to implement Service load balancing; conntrack makes the NAT transparent on the return path.
 
 ---

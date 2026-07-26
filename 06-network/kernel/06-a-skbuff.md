@@ -1,6 +1,14 @@
-# 06-a — struct sk_buff and struct net_device
+# 06-a — `struct sk_buff` and `struct net_device`: The Packet's Journey
 
-`struct sk_buff` is the fundamental unit of network data in the Linux kernel. Every packet — incoming or outgoing — is represented as an `sk_buff` from the moment it is received off the wire (or allocated for transmission) until it is consumed by a socket or sent out a device. `struct net_device` is the kernel's abstraction for a network interface, whether physical (e0, ens3), virtual (veth, lo, tun), or bridged.
+## A Packet as a Kernel Object
+
+When a network packet arrives at a Kubernetes node's physical NIC, the hardware raises an interrupt, the driver's NAPI handler runs, and the very first thing that happens is memory allocation: the kernel allocates a `struct sk_buff` to represent the packet. That single allocation kicks off a journey that touches the driver layer, the network stack, netfilter hooks, socket buffers, and eventually either a userspace read() call or a forwarding decision that re-enters the network stack for transmission. At the end, when the data is consumed or the packet is dropped, the `sk_buff` is freed.
+
+Every networking decision in the kernel — whether to forward or drop a packet, whether to apply NAT, whether to rate-limit traffic — operates on `sk_buff` objects. The iptables rules that Kubernetes relies on for Service routing? Each `iptables` match and target is a netfilter hook that examines or modifies an `sk_buff`. The Cilium eBPF programs that replace iptables? They attach to `tc_classify` and `XDP` hook points that process `sk_buff` objects. The kube-proxy IPVS rules? They make forwarding decisions by looking at `sk_buff` fields.
+
+`struct sk_buff` is accordingly one of the most studied data structures in the Linux networking stack. Understanding its memory layout — specifically why it has three regions (head, data, tail, end) and why headers are pushed toward the front during transmission and stripped at the front during reception — is the foundation for understanding every packet processing optimization in the kernel, from GRO (Generic Receive Offload) to TSO (TCP Segmentation Offload) to XDP (eXpress Data Path).
+
+`struct sk_buff` is the fundamental unit of network data in the Linux kernel. Every packet — incoming or outgoing — is represented as an `sk_buff` from the moment it is received off the wire (or allocated for transmission) until it is consumed by a socket or sent out a device. `struct net_device` is the kernel's abstraction for a network interface, whether physical (eth0, ens3), virtual (veth, lo, tun), or bridged.
 
 ---
 

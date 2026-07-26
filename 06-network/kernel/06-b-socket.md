@@ -1,5 +1,15 @@
 # 06-b — struct socket, struct sock, struct tcp_sock: TCP Lifecycle
 
+## Three Structs for One Connection
+
+The original Unix networking implementation, dating to BSD 4.2 in 1983, made an important design decision: the socket API would be protocol-independent. An application would call `socket(AF_INET, SOCK_STREAM, 0)` and get back a file descriptor that behaved identically whether the underlying protocol was TCP, UDP, or a hypothetical future transport. This required a separation between what userspace saw and what the protocol actually did.
+
+Linux inherited this layering and carried it further. By the time the Linux network stack matured in the mid-1990s, a TCP connection had grown into three distinct kernel objects. `struct socket` is the VFS-facing layer — it implements file operations so that a socket file descriptor works like any other file descriptor. It is what `poll(2)`, `getsockopt(2)`, and `close(2)` operate on. `struct sock` is the protocol-independent network layer underneath it — managing receive and send buffers, sleep queues, callbacks, and socket state. It is what the IP layer hands packets to when they arrive. `struct tcp_sock` embeds `struct sock` and adds everything specific to TCP: sequence numbers, congestion window, retransmission timer state, RTT estimates, and the 250-line list of TCP-specific options. When a packet arrives, the kernel casts the `struct sock` pointer to a `struct tcp_sock *` and operates on the TCP fields directly.
+
+This layering is why you can write a single eBPF program attached to `struct sock` events that works for both TCP and UDP connections, while a program that needs to read the TCP congestion window must cast to `struct tcp_sock`. It is also why `ss -t -e` shows both socket-level state (send-Q, recv-Q) and TCP-level state (congestion algorithm, RTT) — they come from different structs in the same connection object.
+
+For Kubernetes, every pod network connection is a TCP connection whose `struct sock` lives in the pod's network namespace. kube-proxy's IPVS mode and Cilium's eBPF implementation both intercept these connections — one via the Netfilter hook path, one via the sockmap and BPF cgroup hooks that operate directly on `struct sock` before the packet reaches the network stack.
+
 Every TCP connection in Linux is represented by three nested structs layered on top of one another. `struct socket` is the VFS object that userspace touches through a file descriptor. `struct sock` is the protocol-independent network layer that manages buffers, callbacks, and state. `struct tcp_sock` is the TCP-specific extension that carries sequence numbers, congestion control state, and RTT estimates. Understanding all three — and the exact call path from `socket(2)` to packet transmission — is a prerequisite for reading eBPF programs, diagnosing connection drops, and tuning kernel TCP behaviour in Kubernetes.
 
 ---
