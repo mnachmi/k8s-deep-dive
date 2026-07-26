@@ -97,8 +97,9 @@ crash /boot/vmlinux-$(uname -r) /proc/vmcore
 
 ```bash
 # Check if crash kernel is loaded
-cat /sys/kernel/kexec_loaded       # 1 = crash kernel loaded, 0 = not loaded
-cat /sys/kernel/kexec_crash_size   # size reserved for crash kernel
+cat /sys/kernel/kexec_crash_loaded   # 1 = crash kernel loaded (kdump ready)
+cat /sys/kernel/kexec_loaded         # 1 = regular kexec kernel loaded
+cat /sys/kernel/kexec_crash_size     # size reserved for crash kernel
 
 # Check crashkernel parameter
 cat /proc/cmdline | grep -o 'crashkernel=[^ ]*'
@@ -125,4 +126,4 @@ bpftrace -e 'tracepoint:syscalls:sys_enter_kexec_load {
 | `machine_kexec()` | `arch/x86/kernel/machine_kexec_64.c` | https://elixir.bootlin.com/linux/v6.9/source/arch/x86/kernel/machine_kexec_64.c |
 | `crash_kexec()` | `kernel/kexec_core.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/kexec_core.c |
 | `/proc/vmcore` handler | `fs/proc/vmcore.c` | https://elixir.bootlin.com/linux/v6.9/source/fs/proc/vmcore.c |
-| `kexec_crash_loaded()` | `include/linux/kexec.h` | https://elixir.bootlin.com/linux/v6.9/source/include/linux/kexec.h |
+| `kexec_crash_loaded()` — tests `kexec_crash_image != NULL`; sysfs: `/sys/kernel/kexec_crash_loaded` | `include/linux/kexec.h` | https://elixir.bootlin.com/linux/v6.9/source/include/linux/kexec.h |
