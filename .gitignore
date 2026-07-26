@@ -1,3 +1,4 @@
 09-k8s-internals/exercises/oom-score-demo/oom_score_demo
 10-performance/exercises/perf-event-demo/perf_event_demo
 10-performance/exercises/sched-latency-reader/sched-latency-reader
+11-cluster-ops/exercises/node-health-reader/node-health-reader
