@@ -1,4 +1,24 @@
-# `setns(2)`, `unshare(2)`, and the `/proc/<pid>/ns/` Interface
+# 02-c — `setns(2)`, `unshare(2)`, and the `/proc/<pid>/ns/` Interface
+
+## Source Files
+
+| File | Link |
+|------|------|
+| `kernel/nsproxy.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/nsproxy.c |
+| `fs/nsfs.c` | https://elixir.bootlin.com/linux/v6.9/source/fs/nsfs.c |
+| `kernel/fork.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/fork.c |
+
+## The Three Namespace Syscalls
+
+There are exactly three ways to change a process's namespace membership:
+
+1. **`clone()`/`clone3()`** — create a child in a new namespace at fork time. This is how containers are created. The child is born already in its new namespace. The parent is unaffected.
+
+2. **`unshare()`** — detach *the calling process itself* from namespaces it currently shares, without forking. After `unshare(CLONE_NEWNS)`, the calling process has a private copy of its mount namespace. Any future mounts it makes are invisible to other processes that were sharing the old namespace. Critically, the calling process retains its own position in the old namespace for most types — only its *children* will be born in the new namespace for PID and time namespaces.
+
+3. **`setns()`** — join an *existing* namespace identified by a file descriptor. The file descriptor points to a namespace object via the `/proc/<pid>/ns/` filesystem. This is how `kubectl exec` works: the `nsenter` utility opens `/proc/<container-pid>/ns/net`, passes the fd to `setns()`, and then the calling process's network view switches to the container's. The container's namespace object is referenced-counted, so it persists as long as any process belongs to it or any open file descriptor refers to it.
+
+Together these three syscalls form the complete namespace API. `clone()` creates, `setns()` enters, `unshare()` splits. Every container runtime operation maps to one of these three. Understanding their kernel implementation means understanding exactly what happens when `kubectl exec -it pod-name -- /bin/sh` runs.
 
 `setns()` and `unshare()` are the two syscalls that allow a running process to change its namespace membership. Together with `clone()` they form the complete namespace API. `clone()` creates a child in a new namespace at fork time; `setns()` lets a process join a namespace that already exists (identified by a file descriptor); and `unshare()` lets a process detach itself from namespaces it currently shares, getting new private copies without forking. This document covers the kernel implementation of both syscalls plus the `/proc/<pid>/ns/` virtual filesystem that makes namespace objects addressable and referenceable from userspace.
 

@@ -1,9 +1,21 @@
-# `struct nsproxy` — The Namespace Proxy
+# 02-a — `struct nsproxy`: The Namespace Proxy
 
 ## Source Location
 
-`include/linux/nsproxy.h`
-https://elixir.bootlin.com/linux/v6.9/source/include/linux/nsproxy.h
+| File | Link |
+|------|------|
+| `include/linux/nsproxy.h` | https://elixir.bootlin.com/linux/v6.9/source/include/linux/nsproxy.h |
+| `kernel/nsproxy.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/nsproxy.c |
+
+## The Problem of Global State
+
+Consider the `hostname` syscall. A process calls `gethostname()`, the kernel reads the hostname from kernel memory, and returns it. For a single-machine system with one user, this is straightforward. But what does it mean when two containers on the same machine have different hostnames? The kernel's hostname is a single global value. How can two processes on the same kernel see different values?
+
+The answer is namespaces. And the answer to "which namespace does this process belong to?" is `struct nsproxy`.
+
+The nsproxy is a small struct — eight pointers — that serves as a process's window into the kernel's global state. Each pointer refers to a different *namespace instance*: a private copy of some slice of global state that the process sees instead of the shared host view. When the kernel's hostname code wants to know which hostname to return, it does not look at a global variable. It follows `current->nsproxy->uts_ns->name.nodename` — the hostname for *this process's* UTS namespace. All containers sharing the host's UTS namespace see the host hostname. A container with its own UTS namespace sees its private hostname.
+
+This indirection through `nsproxy` is how Linux implements the illusion of isolation without a hypervisor. Six of the eight namespace types are in `nsproxy`. The seventh (user namespace) is in `task_struct->cred->user_ns` because it needs atomic updates with credential changes. The design is clean enough that adding a new namespace type is just: add a pointer to `nsproxy`, implement `copy_<name>_ns()`, and wire it into `create_new_namespaces()`.
 
 ## Full Struct Definition
 

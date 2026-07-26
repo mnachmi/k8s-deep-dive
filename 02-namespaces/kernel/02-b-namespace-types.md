@@ -1,6 +1,18 @@
 # 02-b — Linux Namespace Types: All Eight In Depth
 
-Linux namespaces are the kernel mechanism that turns a single system into the illusion of many independent systems. Each namespace type wraps a specific slice of global kernel state and presents every process inside it with a private copy of that state. Together, the eight namespace types cover the filesystem mount table, hostname, IPC objects, process IDs, the full network stack, user and group identity, the cgroup hierarchy view, and monotonic clock offsets. Introduced incrementally from Linux 2.4.19 through 5.6, they collectively enable what users call "containers" — isolated workloads sharing a single kernel without hypervisor overhead. This document covers each type with the same format: what it isolates, the key kernel struct and its fields, how the kernel copies or initialises it on `clone(2)`/`unshare(2)`, and how to observe it live from the command line or with bpftrace.
+## Building Isolation Incrementally
+
+The clean eight-namespace design you see today was not the result of a single design session in 1999. It was built feature by feature, kernel release by kernel release, over seventeen years, driven by the practical needs of the companies trying to run multi-tenant workloads on shared hardware.
+
+The first namespace arrived in Linux 2.4.19 in 2002: mount namespaces (`CLONE_NEWNS`). The problem it solved was concrete — IBM wanted to run multiple instances of services on the same machine with independent filesystem views. Filesystem isolation was the most obvious need, so that came first. It was so specific and ad-hoc that the flag was named `CLONE_NEWNS` ("new namespace") rather than `CLONE_NEWMNT`, because nobody anticipated there would be more namespaces.
+
+Four years later, in 2.6.19 (2006), UTS and IPC namespaces arrived. The same year, network namespaces started appearing in development kernels. Google was already running production containers by this point using cgroups and early namespace patches; the need was proven, the pressure was coming from companies with real workloads.
+
+PID namespaces and user namespaces arrived in 3.8 (2013), the first kernel version where you could build a complete unprivileged container without `CAP_SYS_ADMIN`. Cgroup namespaces followed in 4.6 (2016) — by which point Docker was two years old and Kubernetes was approaching version 1.0. The final namespace, time namespaces, arrived in 5.6 (2020), added specifically to support checkpoint/restore workflows where a restarted container must believe it was never stopped.
+
+Each namespace type isolates a different piece of the kernel's global state. Each has its own struct, its own locking, its own creation path, and its own Kubernetes operational consequences. This document covers all eight, with the same structure for each: what it isolates, the key kernel struct, how it's created, and how to observe it.
+
+Linux namespaces are the kernel mechanism that turns a single system into the illusion of many independent systems. Each namespace type wraps a specific slice of global kernel state and presents every process inside it with a private copy of that state. Together, the eight namespace types cover the filesystem mount table, hostname, IPC objects, process IDs, the full network stack, user and group identity, the cgroup hierarchy view, and monotonic clock offsets.
 
 ---
 

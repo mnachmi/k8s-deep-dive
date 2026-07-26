@@ -1,5 +1,11 @@
 ## Kubernetes Namespace Isolation: From kubelet to runc
 
+## The Distance Between the YAML and the Kernel
+
+When you deploy a pod with `hostNetwork: false` and no `hostPID`, you are making eight separate kernel decisions. You are specifying that the pod's processes will run in a new PID namespace, a new network namespace, a new UTS namespace, a new IPC namespace, a new mount namespace, a new cgroup namespace, and — unless explicitly shared — new user namespace capabilities. These decisions travel from your `kubectl apply` to the API server, from the API server to kubelet, from kubelet through containerd, from containerd to runc, and finally from runc to the `clone3(2)` and `setns(2)` syscalls that actually create the isolation. That is a long chain with many places for something to go silently wrong.
+
+The abstraction is helpful but costly. When a pod's DNS resolution fails, the debugging path that starts with "check the CoreDNS logs" can take an hour. The path that starts with "check whether the pod is actually in the network namespace you think it is" takes thirty seconds. When `kubectl exec` into a pod cannot see the expected processes, the question is not "what does containerd think?" but "what does `/proc/<pid>/ns/pid` say?" The kernel's view of namespace membership is the ground truth; everything else is a representation of it.
+
 Kubernetes delegates all container isolation to the container runtime. The kubelet sends gRPC calls (defined by the Container Runtime Interface) to containerd; containerd calls runc; runc makes the actual `clone3()` and `setns()` system calls into the Linux kernel. Understanding this chain lets you diagnose namespace-related issues at the kernel level — reading `/proc/<pid>/ns/` entries, running `lsns`, or attaching a bpftrace probe — rather than depending on opaque container runtime logs that rarely tell you which namespace operation failed and why.
 
 ## Section 1 — Which Namespaces Each Container Gets
