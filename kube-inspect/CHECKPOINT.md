@@ -15,4 +15,4 @@ Each chapter adds capabilities to this tool.
 | 08 | CPU affinity + NUMA placement | internal/sched | done |
 | 09 | Node pressure + eviction thresholds | internal/kubelet | done |
 | 10 | Full perf report — complete tool | internal/metrics | done |
-| 11 | Cluster health + kernel version audit | internal/ | pending |
+| 11 | Cluster health + kernel version audit | internal/health | done |

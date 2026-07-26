@@ -9,6 +9,7 @@ import (
 
 	"github.com/linux-to-k8s/kube-inspect/internal/cgroup"
 	"github.com/linux-to-k8s/kube-inspect/internal/ebpf"
+	"github.com/linux-to-k8s/kube-inspect/internal/health"
 	"github.com/linux-to-k8s/kube-inspect/internal/kubelet"
 	"github.com/linux-to-k8s/kube-inspect/internal/metrics"
 	"github.com/linux-to-k8s/kube-inspect/internal/netns"
@@ -29,12 +30,13 @@ var (
 	flagSched      = flag.Bool("sched", false, "Show CPU/NUMA affinity and cgroup cpu.weight/cpu.max for the pod (requires --pod)")
 	flagPressure   = flag.Bool("pressure", false, "Show node PSI and pod memory.events (requires --pod for pod events)")
 	flagPerf       = flag.Bool("perf", false, "Show CPU throttle stats and scheduler latency per process (requires --pod)")
+	flagHealth     = flag.Bool("health", false, "Show kernel version, taint flags, watchdog and panic config, kdump state")
 )
 
 func main() {
 	flag.Parse()
-	if *flagPod == "" && !*flagNode {
-		fmt.Fprintln(os.Stderr, "usage: kube-inspect --pod <uid> [--namespaces] [--cgroup] [--psi] [--mounts] [--netns] [--ebpf] [--sched] [--pressure] [--perf] [--json]")
+	if *flagPod == "" && !*flagNode && !*flagHealth {
+		fmt.Fprintln(os.Stderr, "usage: kube-inspect --pod <uid> [--namespaces] [--cgroup] [--psi] [--mounts] [--netns] [--ebpf] [--sched] [--pressure] [--perf] [--health] [--json]")
 		os.Exit(1)
 	}
 
@@ -267,6 +269,34 @@ func main() {
 					fmt.Println()
 				}
 			}
+		}
+	}
+
+	if *flagHealth {
+		nh, err := health.GetNodeHealth()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "health: %v\n", err)
+		} else {
+			fmt.Printf("Node kernel health:\n")
+			fmt.Printf("  release:          %s\n", nh.Release)
+			if nh.TaintRaw == 0 {
+				fmt.Printf("  tainted:          0 (clean)\n")
+			} else {
+				fmt.Printf("  tainted:          %d\n", nh.TaintRaw)
+				for _, t := range nh.ActiveTaints {
+					fmt.Printf("    bit %2d (%s): %s\n", t.Bit, t.Code, t.Meaning)
+				}
+			}
+			fmt.Printf("  panic:            %d  panic_on_oops: %d  softlockup_panic: %d\n",
+				nh.PanicTimeout, nh.PanicOnOops, nh.SoftlockupPanic)
+			fmt.Printf("  nmi_watchdog:     %d  watchdog_thresh: %ds\n",
+				nh.NMIWatchdog, nh.WatchdogThresh)
+			if nh.KexecLoaded == 1 {
+				fmt.Printf("  kdump:            ready (crashkernel=%s)\n", nh.CrashKernel)
+			} else {
+				fmt.Printf("  kdump:            not loaded\n")
+			}
+			fmt.Println()
 		}
 	}
 }
