@@ -1,5 +1,15 @@
 # 05-d: Block I/O — struct bio, Writeback, and blk-mq
 
+## The Slowest Layer
+
+The disk is slow. This is the oldest truth in systems programming, and everything in the Linux block I/O layer exists to mitigate it. A memory access takes 60-100 nanoseconds. A random read from a spinning hard disk takes 3-10 milliseconds — a factor of 50,000 slower. Even a modern NVMe SSD, the fastest persistent storage available, takes 50-100 microseconds per random read — still 1,000 times slower than DRAM. The kernel cannot make storage faster, but it can hide the latency through batching, reordering, and asynchrony.
+
+The original Linux block layer was a single-queue design: one request queue per block device, protected by a single spinlock. This worked adequately in the 1990s when disk throughput was the bottleneck and CPUs were single-core. As SSDs replaced spinning disks and storage devices gained the ability to process hundreds of thousands of IOPS, the single queue became the bottleneck. The spinlock became so contended that CPUs were spending more time waiting for the lock than actually issuing I/O. Jens Axboe rewrote the block layer as blk-mq — multi-queue block I/O — merged in Linux 3.13 (2014). blk-mq eliminates the global spinlock by giving each CPU core its own software queue; hardware queues aggregate these per-CPU queues and submit directly to the device.
+
+The fundamental kernel block I/O object is `struct bio`. A bio is a single I/O request: a target device, a starting sector, and a set of memory pages (the `bi_io_vec` array) to read into or write from. Filesystems and the page cache construct bio objects and submit them to the block layer. The block layer then schedules, merges, and eventually dispatches them to the device driver. writeback is the process that flushes dirty page cache pages to disk — turning a `write(2)` that returned instantly (because it wrote to the page cache) into actual persistent storage. Understanding the writeback lifecycle is essential for diagnosing latency spikes in containers: when the dirty ratio limit is hit, the writing process blocks in the kernel waiting for writeback to make room.
+
+For Kubernetes, persistent storage means a PVC translates to a block device or filesystem mounted into the container's namespace. Every container log write, every emptyDir write, every PersistentVolume access goes through the block I/O stack. Throttling I/O at the cgroup level (`io.max`) means setting limits on how many bytes per second and how many IOPS a container's bio submissions can consume — enforced by the blk-cgroup controller sitting inside the block layer.
+
 ## Source Locations
 
 | File | URL |

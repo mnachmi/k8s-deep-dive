@@ -1,5 +1,11 @@
 # 05-k8s: VFS and Storage — Linux Kernel Mechanisms in Kubernetes
 
+## Every Volume Is a Mount
+
+Kubernetes storage is fundamentally a mount namespace operation. When a pod starts and needs a PersistentVolume, a ConfigMap, a Secret, or an emptyDir, the container runtime performs a series of `mount(2)` calls inside the pod's mount namespace. ConfigMaps and Secrets become `tmpfs` filesystems bind-mounted at the specified path. PersistentVolumes backed by network storage (NFS, Ceph, AWS EBS) are mounted by kubelet on the host, then bind-mounted into the container. OverlayFS stacks the container image layers and provides the container rootfs. Every storage abstraction — from the highest-level StorageClass to the most concrete PVC — eventually resolves to kernel VFS operations.
+
+This directness means that storage problems can be diagnosed at the kernel level, often more efficiently than through Kubernetes tooling. If a pod cannot write to its PVC, `mount` on the node shows whether the backing device is mounted and what options are in effect. If a ConfigMap update is not visible inside a pod, checking `inotify_watchers` for the tmpfs reveals whether kubelet's inotify-based update mechanism is functioning. If an OverlayFS copy-up is causing write latency on a large file, `iostat` on the node shows the actual device I/O pattern. The Kubernetes abstractions are helpful for configuration but the kernel is always the authority on what is actually happening.
+
 This document connects the kernel concepts from 05-a through 05-d (VFS, mounts, OverlayFS, block I/O) to how Kubernetes manages pod storage. Every volume type, image layer, and secret mount ultimately resolves to the primitives covered in those chapters.
 
 ---

@@ -1,11 +1,16 @@
 # 05-c: OverlayFS — Container Layers in the Kernel
 
-OverlayFS is the filesystem that makes container images work. It stacks multiple
-read-only directory trees (image layers) under a single writable layer and presents
-a unified merged view to the container. Every `docker pull`, every OCI image, every
-running container rootfs is backed by an OverlayFS mount. Understanding its kernel
-implementation explains why containers start in milliseconds, why copy-on-write can
-stall writes to large files, and why a deleted file in a container doesn't vanish
+## Why Containers Start in Milliseconds
+
+Before container image layering existed, a virtual machine required copying an entire disk image before it could run. A 20GB OS image needed 20GB of disk space per instance, and startup meant waiting for that copy to complete. Docker's breakthrough in 2013 was not containers — Linux had LXC before Docker — it was the image format. Docker used union filesystems to stack read-only image layers and present them as a single merged directory tree. A 20GB base image shared across 100 containers occupied 20GB on disk, not 2TB. Startup required no copying at all.
+
+The union filesystem idea predates Docker by years. Knoppix used unionfs in 2003 to run a Linux desktop entirely from a CD. AUFS (Another Union FS) was the implementation Docker first used — well-tested but never merged into the mainline kernel. OverlayFS was a clean-room reimplementation, designed specifically for mainline kernel inclusion. It entered Linux 3.18 in December 2014 and became the default Docker storage driver for most distributions by 2016.
+
+OverlayFS is structurally simple. It takes a stack of read-only directory trees (the "lower" layers, bottom to top in image layer order) and one writable directory (the "upper" layer). The kernel presents a merged view: reads look through the upper layer first, then each lower layer in order. Writes go to the upper layer. When a file from a lower layer is written for the first time, OverlayFS performs a copy-up — it copies the entire file from the lower layer to the upper layer before writing. That copy-up is synchronous and proportional to file size: writing one byte to a 100MB log file triggers a 100MB copy-up first. This is the performance cliff that catches operators off guard when running database containers or log-heavy workloads with OverlayFS.
+
+Deleting a file in OverlayFS does not delete it from the read-only lower layer — it cannot, because those layers are immutable and may be shared. Instead, OverlayFS creates a whiteout entry in the upper layer: a device file with major/minor 0/0 at the same path. The VFS lookup path checks for whiteouts and treats them as ENOENT. This is why removing a file inside a running container does not reduce the size of the image layers. It is also why Dockerfiles that install-then-delete packages in separate RUN steps do not produce smaller images — the delete becomes a whiteout in a later layer while the original files remain in the earlier layer, both present in the final image tarball.
+
+OverlayFS is the filesystem that makes container images work. It stacks multiple read-only directory trees (image layers) under a single writable layer and presents a unified merged view to the container. Every `docker pull`, every OCI image, every running container rootfs is backed by an OverlayFS mount. Understanding its kernel implementation explains why containers start in milliseconds, why copy-on-write can stall writes to large files, and why a deleted file in a container doesn't vanish
 from the image.
 
 ---

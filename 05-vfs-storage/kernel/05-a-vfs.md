@@ -1,6 +1,14 @@
-# VFS — The Virtual Filesystem Switch
+# 05-a — VFS: The Virtual Filesystem Switch
 
-The Virtual Filesystem Switch is the kernel subsystem that makes every filesystem look identical to userspace. `open()`, `read()`, `write()`, `stat()`, `rename()`, and `unlink()` all resolve to the same VFS entry points regardless of whether the target is on ext4, xfs, tmpfs, OverlayFS, or procfs. VFS achieves this through four core objects — `super_block`, `inode`, `dentry`, and `file` — each carrying a pointer to a filesystem-specific vtable. The VFS layer calls into these vtables for every filesystem operation; the filesystem fills in the vtable at mount time.
+## The Abstraction Layer That Made Linux Extensible
+
+In the early 1990s, when Linux was a hobby kernel for a single machine, it had one filesystem: Minix. Adding support for a second filesystem (ext, then ext2) meant the open/read/write syscall implementations had to dispatch to different function tables depending on the filesystem type. This got messy fast. By the time Linux needed to support ten filesystems simultaneously — ext2 for the local disk, proc for kernel state, nfs for remote files, tmpfs for volatile memory, devfs for devices — it became clear that there needed to be an abstraction layer between the syscall interface and the filesystem implementations.
+
+Sun Microsystems had already solved this problem in SunOS 2.0 (1985) with the Virtual File System interface, and Linus Torvalds adapted the concept for Linux. The VFS is the contract between the kernel's syscall layer and the filesystem implementations. It says: if you want to be a filesystem in Linux, implement these four vtables (`super_operations`, `inode_operations`, `dentry_operations`, `file_operations`), and every tool that goes through the standard syscall interface will work with your filesystem automatically.
+
+The consequences for Kubernetes are profound. The OCI container image format is built on the VFS. When a container starts, an overlay filesystem assembles multiple image layers into a single coherent directory tree — each layer is a separate lower directory in the VFS, and writes go to a per-container upper directory. The resulting view is just a normal VFS mount; container processes call `open()` and `read()` exactly as they would on any filesystem, and the VFS dispatches to OverlayFS's vtable implementations, which transparently handle the copy-on-write semantics. Understanding VFS means understanding why container image layers work the way they do, why `kubectl exec` can read files in a running container, and why `/proc` inside a container shows different information from `/proc` on the host.
+
+The Virtual Filesystem Switch is the kernel subsystem that makes every filesystem look identical to userspace. `open()`, `read()`, `write()`, `stat()`, `rename()`, and `unlink()` all resolve to the same VFS entry points regardless of whether the target is on ext4, xfs, tmpfs, OverlayFS, or procfs. VFS achieves this through four core objects — `super_block`, `inode`, `dentry`, and `file` — each carrying a pointer to a filesystem-specific vtable.
 
 ---
 

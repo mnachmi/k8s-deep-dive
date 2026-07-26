@@ -1,9 +1,16 @@
 # 05-b: Mount Subsystem
 
-The mount subsystem tracks every attached filesystem in the kernel. Each `mount`
-point is a `struct mount` — an internal node in a tree that maps device trees onto
-directory trees. This document walks from the raw structs through the mount(2)
-call path to the per-process mountinfo view that containers depend on.
+## The Problem of Per-Process Filesystem Views
+
+How can two containers on the same machine see completely different files at `/etc/hosts`? They are processes in the same kernel, calling the same `open(2)` syscall on the same pathname. Yet one container sees its pod's DNS configuration while the other sees a different pod's entirely. The answer is that pathnames are not global. They are interpreted in the context of each process's mount namespace, and the mount namespace is a tree of `struct mount` objects that the kernel traverses on every path lookup.
+
+Before mount namespaces existed (Linux 2.4.19, 2002), the mount table was a global list. Every process on the machine saw the same filesystem tree. This was adequate for traditional Unix workloads where isolation between processes was not a design goal. The first isolation mechanism — `chroot(2)`, dating to the original Unix — could redirect path lookups to a subtree, but it could not prevent a process from seeing the real mount table once it escaped the chroot jail. A malicious or buggy process could bind-mount over another process's filesystem, remount a read-only filesystem as read-write, or simply read the entire mount table and discover information it should not have.
+
+Mount namespaces introduced per-process mount trees. A clone with `CLONE_NEWNS` creates an independent copy of the parent's mount table; mounts and unmounts within that namespace are invisible to other namespaces. This is what container runtimes use: when runc starts a container, it calls `unshare(CLONE_NEWNS)` to create a fresh mount namespace, then populates it with bind mounts for the container rootfs layers (overlayfs on top), volume mounts (`mount --bind`), the `proc` and `sysfs` pseudofilesystems, and `/dev`. The container sees a completely isolated filesystem tree that shares no mount points with the host.
+
+The kernel's internal representation separates three related concepts that the traditional `mount` command conflated: the VFS dentry/inode tree (what files exist), the `struct vfsmount` (where a filesystem is attached), and the `struct mount` (the per-namespace relationship between a mountpoint and what's mounted there). That separation is why you can have the same ext4 filesystem mounted at different paths in different namespaces simultaneously, and why `/proc/<pid>/mountinfo` shows a different tree for every process in a different namespace.
+
+The mount subsystem tracks every attached filesystem in the kernel. Each mount point is a `struct mount` — an internal node in a tree that maps device trees onto directory trees. This document walks from the raw structs through the mount(2) call path to the per-process mountinfo view that containers depend on.
 
 ---
 
