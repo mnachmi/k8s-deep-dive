@@ -1,5 +1,13 @@
 # eBPF in the Network Data Path — XDP, TC, sockops
 
+## Before the Kernel Allocates Memory
+
+The fundamental cost of kernel packet processing is memory. When a packet arrives, the NIC DMAs it into a ring buffer, the kernel allocates an `sk_buff`, copies metadata into it, and begins the long journey through the network stack. By the time the packet reaches a Netfilter hook, the kernel has allocated memory, populated a 200-byte struct, and called a dozen functions. For most traffic this is invisible overhead. For a DDoS mitigation system processing 100 million packets per second, it is the bottleneck.
+
+Facebook's network team hit this bottleneck in 2015. Their stateful firewall, built on standard Linux iptables, could not keep up with the packet rates required to mitigate volumetric DDoS attacks. The solution they designed became XDP — eXpress Data Path — merged into Linux 4.8 in 2016. XDP runs a BPF program in the NIC driver itself, before the kernel allocates any memory for the packet. The BPF program receives a pointer to the raw packet data in the DMA ring buffer and returns one of three actions: `XDP_DROP` (discard immediately, cheapest possible packet drop), `XDP_TX` (transmit back on the same interface), or `XDP_PASS` (hand up to the normal kernel network stack). A drop at XDP is 10× cheaper than a drop at iptables because no sk_buff was ever allocated.
+
+XDP is not the only eBPF hook in the network path. TC (Traffic Control) hooks in the kernel's qdisc layer can process packets both inbound and outbound with a richer context that includes the full sk_buff. sockops hooks run when socket-level events occur — new connections, congestion state changes — and can modify socket behavior. sk_msg hooks run on the send path and can redirect data between sockets. Together these hooks give a tool like Cilium the ability to implement Service load balancing, network policies, and connection tracking entirely in eBPF, bypassing the Netfilter/iptables infrastructure that kube-proxy relies on — at a cost savings that scales with cluster size.
+
 eBPF programs can be attached at multiple points in the Linux network stack, from the moment a packet arrives in a NIC driver all the way to the socket send path. This document covers the four major network hook families — XDP, TC cls_bpf, sockops, and sk_msg — explaining the context struct and return values available at each hook, how they compare in terms of position and overhead, and the kernel symbols that implement them.
 
 ## 1. Source Locations

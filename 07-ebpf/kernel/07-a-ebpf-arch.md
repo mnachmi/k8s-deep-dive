@@ -1,4 +1,14 @@
-# eBPF Architecture — BPF ISA, `struct bpf_prog`, Verifier, JIT
+# 07-a — eBPF Architecture: BPF ISA, `struct bpf_prog`, Verifier, JIT
+
+## The Programmable Kernel
+
+For most of Linux's history, if you wanted to observe what the kernel was doing — which processes were making which syscalls, how network packets were being processed, where time was being spent — you had two options. You could add printk() calls to the kernel source and recompile. Or you could use one of the fixed-function tracing tools: ftrace, perf events, kprobes, or strace. Both options had fundamental limitations. Recompiling the kernel was impractical in production. The fixed-function tools could only answer the questions their designers had anticipated.
+
+The idea of running user-supplied programs inside the kernel was not new. The Berkeley Packet Filter (BPF), introduced in BSD in 1992 and ported to Linux in 1997, let network tools like `tcpdump` install small programs into the socket filter path. These programs ran in a minimal interpreter — 32-bit registers, no loops, no function calls — to filter packets before they reached userspace. It worked, but it was narrow.
+
+In 2014, Alexei Starovoitov reimplemented BPF from scratch. The new "extended BPF" (eBPF) had 11 64-bit registers, a stack, function calls to kernel helpers, and a safety verifier that could prove programs terminated and only accessed allowed memory. Most importantly: it was not just for network filters. Any hook point in the kernel could host an eBPF program. kprobes at arbitrary kernel functions. Tracepoints at any subsystem. XDP at the NIC driver level. The Linux kernel became partially programmable from userspace, without recompilation.
+
+For Kubernetes, this is foundational. Cilium replaces iptables with eBPF programs loaded at the CNI layer. Falco uses eBPF to trace all syscalls from all containers simultaneously, with nanosecond precision, and no per-container agent. `kubectl top pod` metrics are collected by metrics-server, which reads from cAdvisor, which in newer versions uses eBPF to collect container-level CPU and memory usage. The entire observability stack for Kubernetes — from Hubble to Pixie to Tetragon — is built on eBPF.
 
 eBPF is a kernel-resident virtual machine that runs user-supplied programs inside the kernel without recompilation. Programs are expressed in a 64-bit RISC instruction set, verified for safety by an abstract interpreter, JIT-compiled to native machine code, and attached to hook points ranging from socket filters to XDP drivers to kprobes. This document traces the architecture from raw bytes to running x86-64 code.
 

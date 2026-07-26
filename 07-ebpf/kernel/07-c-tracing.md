@@ -1,5 +1,15 @@
 # eBPF Tracing Attachment Points — kprobe, Tracepoint, fentry/fexit, CO-RE
 
+## Observing the Kernel Without Recompiling It
+
+Before eBPF, observing the running Linux kernel from userspace was genuinely hard. The canonical approach was `printk` — inserting debug print statements into kernel source, recompiling the kernel, rebooting the production machine (or hoping your development VM approximated production closely enough), and reading the results. This was accurate but catastrophically invasive. The alternative was SystemTap: a scripting language that compiled to kernel modules, required the kernel-devel package, and could crash the machine if the script was wrong. DTrace, which Solaris developers had used successfully for years, was proprietary and unavailable on Linux.
+
+kprobes existed before eBPF. They were added to Linux 2.6.9 in 2004 to let debuggers trap on arbitrary kernel instructions. The kernel saves register state, calls a registered handler, and continues execution. kprobes were powerful but dangerous: a kprobe handler could run arbitrary C code with no safety verification, and a bug in the handler meant a kernel crash. Tracepoints, added in Linux 2.6.28 (2008) by Mathieu Desnoyers, were safer — static hooks built into kernel source with a stable ABI — but required the kernel developer to have placed a tracepoint at the exact location you needed.
+
+eBPF changed the safety equation. The verifier guarantees that a BPF program terminates and cannot crash the kernel. A kprobe backed by a verified BPF program is as safe to attach as a tracepoint. This opened up the full kernel symbol table — any function entry or return point — to safe, real-time instrumentation from userspace, without rebooting, without kernel modules, without root access in some configurations. The production Linux kernel became observable in ways that were previously only possible in debug builds.
+
+The four attachment mechanisms cover different needs. kprobes attach to any kernel symbol dynamically, but symbol addresses can change between kernel versions. Tracepoints are stable: the kernel maintains backward compatibility for tracepoint ABIs across versions, making them reliable for long-lived tools. fentry/fexit trampolines, added in Linux 5.5, are faster than kprobes and use BTF type information to provide typed access to function arguments. CO-RE (Compile Once, Run Everywhere) makes BPF programs portable: instead of hardcoding struct field offsets, BTF relocation records are patched at load time based on the running kernel's actual struct layout.
+
 eBPF programs are not free-standing — they must attach to a hook point in the kernel that calls them when a specific event fires. This document covers the four primary tracing attachment mechanisms: kprobe (dynamic, any kernel symbol), tracepoints (static, stable ABI), and fentry/fexit (BTF-based trampolines). It then explains CO-RE, which makes BPF programs portable across kernel versions, and provides bpftrace and bpftool commands for live observation.
 
 ## 1. Source Locations

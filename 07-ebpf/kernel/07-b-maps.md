@@ -1,5 +1,15 @@
 # BPF Maps — Hash, Array, Ring Buffer, BTF, and bpf(2) Operations
 
+## The Missing Ingredient: Persistent State
+
+Classic BPF, as designed by Steven McCanne and Van Jacobson in their 1992 paper and implemented in Linux in 1997, could filter packets. That was all it could do. A BPF program ran on a packet, decided whether to pass or drop it, and terminated. There was no way to count packets, no way to build a connection table, no way to communicate results back to userspace except through the yes/no filter decision. BPF programs were stateless by design.
+
+This was a fundamental limitation. The most interesting observability and networking tasks require state: tracking which processes are opening which files, counting bytes per connection, detecting port scans by watching connection attempts accumulate over time. Without persistent storage between invocations, a BPF program was an elaborate one-liner.
+
+eBPF's most consequential addition was maps, introduced in Linux 3.18 (December 2014) alongside the first eBPF programs. A map is a typed key→value store allocated in kernel memory, accessed by both BPF programs and userspace via the `bpf(2)` syscall. BPF programs can read and write maps from any hook point; userspace can create them, iterate them, and read the results. A kprobe on `sys_open` can increment a counter in a hash map. A userspace tool can read that counter every second. A service mesh proxy can maintain a map of all active connections and update it on every packet. Maps transformed BPF from a packet filter into a general-purpose in-kernel computation framework with a safe userspace interface.
+
+The kernel ships more than twenty map types today, each optimized for different access patterns. Hash maps for arbitrary key lookups. Arrays for fast integer-indexed access. Per-CPU variants for lock-free updates. Ring buffers for efficient event streaming to userspace. The BTF type system gives maps structured type information so that bpftool and debugging tools can dump map contents with field names rather than raw bytes — essential for the observability tools that Kubernetes relies on.
+
 BPF maps are the primary mechanism for sharing state between BPF programs and between BPF programs and userspace. They are typed key→value stores created through the `bpf(2)` syscall and reference-counted as file descriptors. The kernel ships more than twenty map types; this document covers the three most important — hash, array, and ring buffer — along with the BTF type system that gives maps runtime introspection, and the bpf(2) operations used to manipulate them from userspace.
 
 ## 1. Source Locations

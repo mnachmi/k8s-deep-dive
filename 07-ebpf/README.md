@@ -1,5 +1,11 @@
 # Chapter 07 — eBPF
 
+For two decades, extending the Linux kernel with custom logic required one of three approaches: modify the kernel and submit a patch (6-12 month upstream process), write a kernel module (native code, one bug causes a panic), or use ptrace and system call interposition (50× overhead, misses kernel-internal events). None of these options were viable for production observability or networking tools that needed to run on any Linux kernel version without rebooting.
+
+eBPF changed this. In 2014, Alexei Starovoitov rewrote the classic BPF packet filter as a general-purpose in-kernel virtual machine with 11 64-bit registers, a verifier that proves program safety at load time, and a JIT compiler that translates BPF bytecode to native machine code. For the first time, userspace could inject logic into the kernel at runtime — attaching programs to arbitrary function calls, tracepoints, network interfaces, and socket operations — with the verifier guaranteeing that the program would terminate, not crash the kernel, and not access memory out of bounds.
+
+The Kubernetes ecosystem was transformed by this capability. Cilium replaced kube-proxy's O(N) iptables rules with O(1) BPF map lookups. Falco and Tetragon replaced fragile kernel-module-based syscall interception with safe, stable tracepoint hooks. Hubble attached to the Cilium BPF data path to build a cluster-wide connection audit log without any packet copying. The production infrastructure of major cloud providers — Facebook, Google, Cloudflare — is built on eBPF programs that would have required kernel modifications five years ago.
+
 eBPF turns the Linux kernel into a programmable platform: user-supplied programs are verified, JIT-compiled to native code, and attached to hundreds of hook points without kernel recompilation or module loading. This chapter goes from the BPF instruction set architecture through maps, tracing probes, and network data-path hooks — and shows how Cilium, Tetragon, and Hubble build production Kubernetes infrastructure on top.
 
 ## Learning Objectives

@@ -1,5 +1,13 @@
 # 07-k8s — eBPF in Kubernetes: Cilium, Tetragon, Hubble, and Falco
 
+## The Infrastructure Beneath the Abstractions
+
+In 2016, kube-proxy on large Kubernetes clusters had become a bottleneck. Every Service endpoint change required regenerating thousands of iptables rules. Rule insertion was O(N) — on a cluster with 10,000 Services, a single endpoint update rewrote the entire ruleset. Latency spikes during Service updates were measured in seconds. The fundamental problem was that iptables, designed in the late 1990s for stateful firewall rulesets of dozens of rules, was being used as a dynamic load balancer for thousands of frequently-changing backends.
+
+The eBPF-based solution is architecturally different. Instead of a linear chain of match-action rules, Cilium maintains hash maps: a map from ClusterIP:port to a list of backend pod IPs, updated incrementally on each endpoint change. A BPF program attached at XDP or TC performs a map lookup — O(1) regardless of cluster size — and redirects the packet directly to the backend. On a cluster with 100,000 endpoints, the lookup time is the same as on a cluster with 10. The Service table can be updated entry by entry rather than regenerated wholesale.
+
+The same architecture that makes networking fast makes observability deep. Tetragon attaches BPF programs to kernel tracepoints and LSM hooks, generating security events — process exec, file access, network connection — with full kernel-level context: cgroup identity, mount namespace ID, capability set at the time of the operation. These are not approximations reconstructed from userspace; they are measurements taken at the kernel boundary where the operation actually occurred. Falco uses the same mechanism. Hubble aggregates the network-level events from Cilium's BPF programs into a flow log that shows every connection attempt in the cluster, with source and destination pod identity derived from the cgroup namespace.
+
 eBPF has become the foundation of modern Kubernetes networking and security tooling. Where kube-proxy once relied on O(N) iptables traversal, Cilium performs O(1) hash map lookups in the kernel data path. Where traditional security tools intercepted syscalls through kernel modules, Tetragon and Falco attach to kernel tracepoints and LSM hooks with full verifier safety. This document traces how each major Kubernetes eBPF project maps to the kernel hook points and map types covered in earlier chapters.
 
 ---
