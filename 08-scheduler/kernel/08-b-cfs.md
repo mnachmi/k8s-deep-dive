@@ -1,5 +1,15 @@
 # 08-b — CFS: `struct sched_entity`, `struct cfs_rq`, vruntime
 
+## The Problem with "Fair"
+
+Fairness in scheduling is easy to define and hard to implement. The intuitive definition — every runnable process gets an equal share of CPU time — breaks down immediately in practice. If ten processes are runnable and ten timeslices have elapsed, each should have run once. But what if one process slept for eight of those timeslices? Under a naive round-robin scheme, the sleeping process woke up and immediately preempted everything else, starving the other nine for the duration of its catch-up. The scheduler had to decide whether sleeping was "rewarded" with extra CPU time or not, and every attempt to answer that question produced latency anomalies in interactive workloads.
+
+The Linux scheduler in the 2.4 and early 2.6 kernels used an O(1) algorithm that assigned fixed timeslices based on priority and maintained active and expired run queues. When Ingo Molnár replaced it with O(1) in 2003 it was a performance improvement, but by 2007 the interactive scheduling behavior had accumulated enough heuristics and special cases that Con Kolivas — a Linux developer and anesthesiologist who ran the kernel on his desktop workstation — published a series of patches called RSDL (Rotating Staircase Deadline) demonstrating that most of the heuristics were wrong. Rather than apply Con's patches, Ingo Molnár wrote the Completely Fair Scheduler from scratch in a weekend. It was merged in Linux 2.6.23, October 2007.
+
+The insight CFS is built on: instead of tracking timeslices, track virtual runtime. Every task has a `vruntime` counter that accumulates CPU time, weighted by the task's priority. Lower-priority tasks accumulate vruntime faster than higher-priority tasks, so a high-priority task can run longer before being preempted. The runqueue is a red-black tree ordered by vruntime. The scheduler always picks the leftmost node — the task with the smallest vruntime, the one that has had the least CPU time relative to its priority. When a sleeping task wakes, its vruntime is set to the minimum vruntime in the tree (not zero), so it gets one catch-up opportunity but cannot indefinitely starve others.
+
+For Kubernetes, CFS is the mechanism underneath every CPU request and limit. The bandwidth controller extends CFS with per-cgroup quota: a cgroup may consume at most `quota` microseconds of CPU time in every `period` microseconds. When the quota is exhausted, the cgroup's tasks are removed from the runqueue and throttled until the next period begins. The `cpu.stat` file exposes exactly how many periods were throttled and for how many microseconds — the ground truth for diagnosing the CPU throttling that shows up as p99 latency spikes in containerized applications.
+
 ## Source Locations
 
 | File | Key Symbols | URL |

@@ -1,5 +1,15 @@
 # Chapter 08 — CPU Scheduler: Kubernetes Connection
 
+## The Throttle You Cannot See
+
+CPU requests and limits in Kubernetes have a counterintuitive property: a pod that is heavily CPU throttled will show low CPU utilization in Kubernetes metrics. This is not a measurement error. It is a correct description of an incorrectly diagnosed problem.
+
+The CFS bandwidth controller pauses cgroup tasks when they exhaust their quota. While paused, a process consumes zero CPU — it is not executing. Tools that measure CPU utilization by sampling which processes are running will correctly record zero usage for a throttled container. But the container is not idle; it is stalled. Its latency is degrading because the scheduler is enforcing a strict quota, and no amount of available CPU capacity on the node will help until the next period begins.
+
+This is the gap between what `kubectl top pod` shows and what is actually happening. The pod has 10% CPU utilization and 200ms p99 latency. The node has 60% idle CPU. The problem is not node contention — it is that the pod's `limits.cpu: 100m` maps to `50000 100000` in `cpu.max`, and the pod is exhausting its 50ms quota in the first few requests of each 100ms period and then waiting. The fix is not to add nodes. The fix is to raise or remove the CPU limit.
+
+Understanding this requires understanding the mapping from Kubernetes CPU concepts to kernel CFS primitives: how `requests.cpu` becomes `cpu.weight`, how `limits.cpu` becomes `cpu.max`, what `cpu.stat` contains, and how to read throttle rates directly from the cgroup. The sections below provide that mapping.
+
 ## 1. Architecture Overview
 
 | K8s Concept | Kernel Primitive | File / Interface |

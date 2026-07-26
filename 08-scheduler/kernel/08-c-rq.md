@@ -1,5 +1,15 @@
 # 08-c — `struct rq`, RT/DL Schedulers, `sched_domain`, NUMA Balancing
 
+## One Queue Per CPU
+
+The earliest Linux schedulers used a single global runqueue. Every CPU picked its next task from the same list, which meant every scheduling decision required taking the global lock. On a two-CPU machine this was tolerable. On an eight-CPU machine in 2001 it was a bottleneck. On a 128-core server today it would be catastrophic — the lock would be contended on every context switch, hundreds of thousands of times per second, with CPUs spending more time fighting over the lock than executing tasks.
+
+The solution adopted in Linux 2.6 was to give each CPU its own runqueue — `struct rq`. No global lock. Each CPU picks from its own queue independently. The complexity moved from the common case (pick next task) to load balancing: periodically, CPUs must check neighboring queues and steal work from busy ones to prevent idle CPUs from sitting empty while overloaded CPUs run long queues. Getting this right requires understanding the physical topology of the machine — which CPUs share an L1 cache (a sibling pair on one physical core), which share an L2 (a physical core's hyperthreads), which share an L3 (a socket), and which are on separate NUMA nodes. Migrating a task between hyperthreads on the same core costs almost nothing. Migrating between NUMA nodes means the task's entire working set must be faulted in from remote memory.
+
+The `sched_domain` hierarchy models this topology. A sched_domain describes a set of CPUs with similar migration costs, and they are arranged in a tree from smallest (SMT siblings) to largest (NUMA nodes). The load balancer walks this hierarchy, balancing within the smallest domain first. Tasks that keep migrating between NUMA nodes pay the remote memory access tax on every access; NUMA balancing tries to detect these tasks and move them (or their memory) to a single node.
+
+`struct rq` also holds the RT and deadline runqueues. A real-time task at priority 99 on a given CPU will preempt every CFS task on that CPU, regardless of vruntime. If a system administrator accidentally places a real-time task in a Kubernetes pod without the proper scheduling class, it can monopolize a CPU and starve the entire node's container workload — which is why Kubernetes does not grant RT scheduling privileges to containers by default, and why platform teams restrict access to the `runtimeClassName` feature that would allow it.
+
 ## Source Locations
 
 | File | Key Symbols | URL |

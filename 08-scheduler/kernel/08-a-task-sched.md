@@ -1,4 +1,16 @@
-# 08-a — `task_struct` Scheduling Fields and `sched_class` Vtable
+# 08-a — `task_struct` Scheduling Fields and the `sched_class` Vtable
+
+## Why the Scheduler Is Not One Thing
+
+"The scheduler" sounds like a single algorithm. In Linux, it is four, and they coexist in a priority hierarchy. Each algorithm is represented by a `struct sched_class` — a vtable of function pointers. When the scheduler needs to pick the next task to run, it walks the class hierarchy from highest to lowest priority and calls `pick_next_task()` on each. The first class that has a runnable task wins.
+
+The four classes, in priority order:
+1. **Stop** — internal kernel tasks that must preempt everything (CPU hotplug, load balancing migration). You never see these in user workloads.
+2. **Deadline (SCHED_DEADLINE)** — real-time tasks with explicit bandwidth reservations. A task is allowed to run for at most Q nanoseconds in every P nanoseconds. Used in audio/video systems, occasionally in Kubernetes for latency-critical pods.
+3. **Real-Time (SCHED_FIFO / SCHED_RR)** — fixed-priority real-time tasks. Priority 1-99. Higher priority always preempts lower. Used by kernel threads and some embedded workloads. Almost never in Kubernetes unless a pod requests `RealTime` scheduling class.
+4. **CFS (SCHED_NORMAL / SCHED_BATCH / SCHED_IDLE)** — the Completely Fair Scheduler. This is where 99% of Kubernetes container processes live.
+
+Understanding this hierarchy matters for Kubernetes operators because CPU throttling — one of the most common performance problems in containerized workloads — happens entirely within the CFS layer, in the bandwidth controller that tracks per-cgroup CPU quota usage. A container that is "CPU throttled" is not being starved by a higher-priority class; it is being paused by the CFS bandwidth controller after exhausting its period quota. The scheduler's `cpu.stat` file exposes exactly how much time was spent throttled.
 
 ## Source Locations
 
