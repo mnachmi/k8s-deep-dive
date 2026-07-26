@@ -1,5 +1,9 @@
 # From Kernel Expert to Kubernetes Performance Engineer
 
+Most Kubernetes operators have a working mental model of how the system operates: pods run on nodes, kubelet manages them, the API server stores state, the scheduler places workloads. This model is accurate enough to deploy services and write manifests. It is not accurate enough to diagnose why a pod is being OOM killed every six hours, why a container with 100m CPU limit has 300ms p99 latency, why a node is occasionally marked NotReady with no obvious cause, or why a memory leak in one pod can degrade performance for pods in a different namespace.
+
+The reason those problems are hard to diagnose from the Kubernetes layer is that they are not Kubernetes problems. They are Linux kernel problems that Kubernetes has abstracted. The OOM kill is the kernel's `oom_badness()` scoring function picking a victim based on `oom_score_adj`, which kubelet sets based on QoS class. The CPU latency is the CFS bandwidth controller pausing cgroup tasks that have exhausted their quota, enforced in the kernel scheduler, visible only in `cpu.stat`. The NotReady node is the NMI watchdog detecting a CPU lockup and calling `panic()`. These mechanisms exist in the kernel; the Kubernetes layer reports their effects.
+
 This course builds your mastery of Linux kernel internals and shows how Kubernetes leverages them. You will read kernel source, write syscall-level C and Go, debug cgroup hierarchies, and trace system behavior with eBPF. By the end, you will see through Kubernetes abstractions to the kernel syscalls underneath.
 
 Every chapter teaches a Linux kernel mechanism from scratch with kernel source precision, then shows exactly how Kubernetes uses it, then builds one capability into `kube-inspect`, a per-pod performance diagnostic daemon.
