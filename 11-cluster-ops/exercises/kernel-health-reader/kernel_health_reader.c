@@ -6,14 +6,14 @@
  *   b) Taint flags from /proc/sys/kernel/tainted (decode each bit)
  *   c) Watchdog state from /proc/sys/kernel/nmi_watchdog and watchdog_thresh
  *   d) Panic configuration from /proc/sys/kernel/panic and panic_on_oops
- *   e) kdump readiness from /sys/kernel/kexec_loaded and /proc/cmdline
+ *   e) kdump readiness from /sys/kernel/kexec_crash_loaded and /proc/cmdline
  *
  * Build:  gcc -Wall -Wextra -Werror -o kernel_health_reader kernel_health_reader.c
  * Run:    ./kernel_health_reader
  *
  * Kernel paths:
  *   /proc/sys/kernel/tainted  → include/linux/panic.h TAINT_* flags
- *   /sys/kernel/kexec_loaded  → kernel/kexec_core.c kexec_crash_loaded()
+ *   /sys/kernel/kexec_crash_loaded  → kernel/kexec_core.c kexec_crash_loaded()
  */
 
 #define _GNU_SOURCE
@@ -26,7 +26,7 @@
 static const char *taint_names[] = {
     "P: proprietary module",     /*  0 */
     "F: forced module load",     /*  1 */
-    "S: SMP on non-SMP CPU",     /*  2 */
+    "S: CPU out of spec (overclocking, thermals, hw errata)",     /*  2 */
     "R: forced module rmmod",    /*  3 */
     "M: machine check error",    /*  4 */
     "B: bad page accessed",      /*  5 */
@@ -115,9 +115,9 @@ static void part_e(void)
 {
     char loaded[16], cmdline[512];
     printf("\n=== Part e: kdump readiness ===\n");
-    read_file("/sys/kernel/kexec_loaded", loaded, sizeof(loaded));
+    read_file("/sys/kernel/kexec_crash_loaded", loaded, sizeof(loaded));
     read_file("/proc/cmdline", cmdline, sizeof(cmdline));
-    printf("  kexec_loaded: %s  (1=crash kernel ready, 0=no kdump)\n", loaded);
+    printf("  kexec_crash_loaded: %s  (1=crash kernel ready, 0=no kdump)\n", loaded);
     /* find crashkernel= parameter */
     char *ck = strstr(cmdline, "crashkernel=");
     if (ck) {

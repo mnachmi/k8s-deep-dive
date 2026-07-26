@@ -4,7 +4,7 @@
 //   - /proc/version and /proc/sys/kernel/osrelease (kernel version)
 //   - /proc/sys/kernel/tainted (decode taint flags)
 //   - /proc/sys/kernel/panic, panic_on_oops, nmi_watchdog, watchdog_thresh
-//   - /sys/kernel/kexec_loaded (kdump readiness)
+//   - /sys/kernel/kexec_crash_loaded (kdump readiness)
 //   - /dev/kmsg (scan recent kernel messages for OOM kills and BUG/WARN)
 //
 // Usage:
@@ -44,7 +44,7 @@ type TaintFlag struct {
 var taintTable = []TaintFlag{
 	{0, "P", "proprietary module loaded"},
 	{1, "F", "module force-loaded"},
-	{2, "S", "SMP on non-SMP CPU"},
+	{2, "S", "CPU out of spec (overclocking, thermals, hw errata)"},
 	{3, "R", "module force-removed"},
 	{4, "M", "machine check error"},
 	{5, "B", "bad page accessed"},
@@ -139,7 +139,7 @@ func collectHealth() KernelHealth {
 		NMIWatchdog:     readSysctlInt("/proc/sys/kernel/nmi_watchdog"),
 		WatchdogThresh:  readSysctlInt("/proc/sys/kernel/watchdog_thresh"),
 		SoftlockupPanic: readSysctlInt("/proc/sys/kernel/softlockup_panic"),
-		KexecLoaded:     readSysctlInt("/sys/kernel/kexec_loaded"),
+		KexecLoaded:     readSysctlInt("/sys/kernel/kexec_crash_loaded"),
 		CrashKernel:     parseCmdlineParam("crashkernel"),
 	}
 }
@@ -209,7 +209,7 @@ func printHealth(h KernelHealth) {
 		h.WatchdogThresh, h.WatchdogThresh*2, h.WatchdogThresh)
 	fmt.Println()
 	fmt.Println("=== kdump Readiness ===")
-	fmt.Printf("  kexec_loaded:  %d  (1=crash kernel loaded)\n", h.KexecLoaded)
+	fmt.Printf("  kexec_crash_loaded:  %d  (1=crash kernel loaded)\n", h.KexecLoaded)
 	if h.CrashKernel != "" {
 		fmt.Printf("  crashkernel:   %s\n", h.CrashKernel)
 	} else {

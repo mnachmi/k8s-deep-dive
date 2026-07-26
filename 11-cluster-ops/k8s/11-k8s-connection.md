@@ -23,7 +23,7 @@ API server: last heartbeat > node-monitor-grace-period (default 40s)
      ▼
 node-lifecycle-controller sets NodeReady=Unknown
      │  Adds taints:
-     │    node.kubernetes.io/not-ready:NoSchedule
+     │    node.kubernetes.io/not-ready:NoExecute
      │    node.kubernetes.io/unreachable:NoExecute (effect after 5s default)
      ▼
 Pods with no toleration: evicted after tolerationSeconds (default 300s)
@@ -78,7 +78,7 @@ cat /proc/version
 sysctl kernel.panic kernel.panic_on_oops kernel.nmi_watchdog kernel.watchdog_thresh
 
 # kdump readiness
-cat /sys/kernel/kexec_loaded
+cat /sys/kernel/kexec_crash_loaded
 cat /proc/cmdline | grep crashkernel
 
 # Check for past oops/panics
@@ -98,7 +98,7 @@ kubectl get events --field-selector type=Warning --all-namespaces | grep -i 'oom
 | Node tainted (bit 9 = WARN) | Driver BUG_ON/WARN | `dmesg | grep WARN`; check modules |
 | Pods evicted during upgrade | PodDisruptionBudget not set | Set `minAvailable` in PDB |
 | etcd latency spikes | Kernel writeback competing | `iostat -x` + `vm.dirty_background_ratio` |
-| No crash dump after panic | kdump not configured | `cat /sys/kernel/kexec_loaded` |
+| No crash dump after panic | kdump not configured | `cat /sys/kernel/kexec_crash_loaded` |
 
 ## 7. Verification Commands
 
@@ -107,7 +107,7 @@ kubectl get events --field-selector type=Warning --all-namespaces | grep -i 'oom
 echo "=== Kernel Version ===" && uname -r && cat /proc/version
 echo "=== Taint State ===" && cat /proc/sys/kernel/tainted
 echo "=== Watchdog ===" && sysctl kernel.nmi_watchdog kernel.watchdog_thresh kernel.softlockup_panic
-echo "=== Kdump ===" && cat /sys/kernel/kexec_loaded
+echo "=== Kdump ===" && cat /sys/kernel/kexec_crash_loaded
 echo "=== Panic Config ===" && sysctl kernel.panic kernel.panic_on_oops
 
 # Recent kernel warnings

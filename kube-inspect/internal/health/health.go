@@ -16,7 +16,7 @@ type TaintBit struct {
 var taintTable = []TaintBit{
 	{0, "P", "proprietary module"},
 	{1, "F", "forced module load"},
-	{2, "S", "SMP on non-SMP CPU"},
+	{2, "S", "CPU out of spec (overclocking, thermals, hw errata)"},
 	{3, "R", "forced module rmmod"},
 	{4, "M", "machine check error"},
 	{5, "B", "bad page"},
@@ -94,7 +94,7 @@ func GetNodeHealth() (NodeHealth, error) {
 		NMIWatchdog:     readSysctlInt("/proc/sys/kernel/nmi_watchdog"),
 		WatchdogThresh:  readSysctlInt("/proc/sys/kernel/watchdog_thresh"),
 		SoftlockupPanic: readSysctlInt("/proc/sys/kernel/softlockup_panic"),
-		KexecLoaded:     readSysctlInt("/sys/kernel/kexec_loaded"),
+		KexecLoaded:     readSysctlInt("/sys/kernel/kexec_crash_loaded"),
 		CrashKernel:     cmdlineParam("crashkernel"),
 	}, nil
 }
