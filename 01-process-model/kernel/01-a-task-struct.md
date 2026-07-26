@@ -1,25 +1,30 @@
 # 01-a — `struct task_struct`: The Complete Process Descriptor
 
-> **Source file:**
-> [`include/linux/sched.h`](https://elixir.bootlin.com/linux/v6.9/source/include/linux/sched.h#L737)
-> (Linux 6.9, x86-64)
->
-> **Size:** approximately 9,280 bytes on x86-64 (varies with kernel config).
-> See Section 7 for how to measure it on your running kernel.
+## Source Files
 
-`struct task_struct` is the kernel's complete description of a running or runnable
-process. Every process and every thread in the system — including kernel threads — is
-represented by one `task_struct`. When Kubernetes creates a container, it is
-ultimately asking the kernel to allocate and populate one of these structures.
+| File | Link |
+|------|------|
+| `include/linux/sched.h` | https://elixir.bootlin.com/linux/v6.9/source/include/linux/sched.h#L737 |
+| `kernel/fork.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/fork.c |
+| `kernel/exit.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/exit.c |
 
-Understanding `task_struct` is not optional background reading. It is the foundation
-on which everything else in this course rests:
+## The Kernel's Representation of "Running"
 
-- A container's namespace isolation lives in `task_struct.nsproxy`
-- A container's resource limits live in `task_struct.cgroups`
-- A container's filesystem view lives in `task_struct.mm` and `task_struct.fs`
-- A container's PID is stored in `task_struct.pid` / `task_struct.tgid`
-- The scheduler's view of the process is `task_struct.se` (the CFS sched_entity)
+The processor has no concept of a process. It executes instructions, reads and writes memory, and responds to interrupts. That is all it does. The illusion that a modern machine runs hundreds of programs simultaneously — each with its own address space, its own file descriptors, its own view of the network, its own identity — is maintained entirely by the kernel. And the kernel maintains it using one fundamental data structure per running entity: `struct task_struct`.
+
+This was not always as complex as it is today. When Linus Torvalds wrote the first Linux scheduler in 1991, the task structure was small — maybe two dozen fields. It stored the program counter, the stack pointer, the process state, a memory descriptor, and little else. The early Linux kernel was a hobby OS for a 386 with a single user. The `task_struct` reflected that.
+
+Thirty years later, the struct spans over 800 lines and approximately 9,280 bytes on a typical x86-64 build. It grew because every major kernel subsystem needed to remember something per-process: the signal handling code added signal state, the filesystem code added file descriptor tables and filesystem context, the security code added credentials and capabilities, the cgroup subsystem added membership pointers, the real-time scheduler added a separate scheduling entity alongside the CFS entity, the performance counter infrastructure added perf event state, and so on. The size of `task_struct` is a precise record of everything the Linux kernel has decided to do on behalf of each running program.
+
+For Kubernetes, `task_struct` is the ground truth of what a "container" is. A container is not a virtual machine. It is not a separate kernel. It is not a hypervisor abstraction. It is an ordinary Linux process — one `task_struct` in the kernel's task list — whose particular combination of field values creates the isolation illusion. Specifically:
+
+- A container's namespace isolation lives in `task_struct.nsproxy` — a pointer to a set of namespace structs that determine what the process can see
+- A container's resource limits live in `task_struct.cgroups` — a pointer to a `css_set` that connects the process to its cgroup hierarchy
+- A container's filesystem view lives in `task_struct.mm` (address space) and `task_struct.fs` (filesystem context)
+- A container's PID is stored in `task_struct.thread_pid` — a `struct pid` with per-namespace PID numbers
+- The scheduler's view of the process is `task_struct.se` — a `struct sched_entity` embedded directly in the struct, not a pointer
+
+Understanding `task_struct` is not optional background reading. Every debugging command you will ever run against a container process — `ps`, `strace`, `/proc` reads, bpftrace programs, perf profiling — is ultimately reading or interpreting fields from one or more `task_struct` instances. Every kernel panic involving a container, every OOM kill, every CPU throttle event traces back to decisions the kernel makes while looking at this struct.
 
 ---
 
@@ -1001,10 +1006,13 @@ bpftrace -e 'kprobe:copy_process {
 
 ---
 
-## 4. Lifecycle
+## 4. Lifecycle: From Slab to Zombie
 
-The `task_struct` lifecycle spans from allocation via the slab allocator to deallocation
-after process exit. Every container process follows this exact path.
+The life of a process is a precisely defined sequence of kernel function calls. Every container process — from the pause container that holds the pod's namespaces to the nginx worker that serves HTTP traffic — follows this exact path. The path begins with a `clone3()` syscall and ends, eventually, with the slab allocator reclaiming the memory. In between are creation, scheduling, blocking, waking, and exit.
+
+The reason this lifecycle matters for containers is that every phase has observable consequences. A pod that starts slowly might be spending too much time in the namespace-copying phase. A zombie container process that won't clean up is stuck waiting for its parent to call `wait()`. A container that uses too much memory will hit the cgroup memory limit during the `try_charge()` call that happens on every page fault. Knowing which kernel function corresponds to which observable behavior is what separates informed debugging from guessing.
+
+The `task_struct` lifecycle spans from allocation via the slab allocator to deallocation after process exit.
 
 ```
 Lifecycle of a task_struct

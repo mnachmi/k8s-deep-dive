@@ -1,20 +1,25 @@
 # 01-c — PID Namespaces: `struct pid_namespace`, `struct pid`, and the Container Init Problem
 
-> **Primary source files:**
-> [`include/linux/pid_namespace.h`](https://elixir.bootlin.com/linux/v6.9/source/include/linux/pid_namespace.h)
-> [`include/linux/pid.h`](https://elixir.bootlin.com/linux/v6.9/source/include/linux/pid.h)
-> [`kernel/pid_namespace.c`](https://elixir.bootlin.com/linux/v6.9/source/kernel/pid_namespace.c)
-> [`kernel/pid.c`](https://elixir.bootlin.com/linux/v6.9/source/kernel/pid.c)
-> (Linux 6.9, x86-64)
+## Source Files
 
-The PID namespace is the kernel mechanism that makes a container's processes believe
-they live in a private process tree. From inside a container, `ps aux` shows only the
-container's processes. PID 1 is the container's init process. The host's thousands of
-processes are invisible.
+| File | Link |
+|------|------|
+| `include/linux/pid_namespace.h` | https://elixir.bootlin.com/linux/v6.9/source/include/linux/pid_namespace.h |
+| `include/linux/pid.h` | https://elixir.bootlin.com/linux/v6.9/source/include/linux/pid.h |
+| `kernel/pid_namespace.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/pid_namespace.c |
+| `kernel/pid.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/pid.c |
 
-This document dissects the three data structures that implement this illusion —
-`struct pid_namespace`, `struct pid`, and `struct upid` — and explains the one
-correctness problem that kills more containers than any other: the PID 1 init problem.
+## Two Processes, Two Different PIDs, One Kernel
+
+Before PID namespaces existed, a process had exactly one PID — its position in the global process table. This was fine for a system running one set of workloads. It was a problem for running multiple isolated workloads on the same machine. If you wanted to run a monitoring agent inside a container that always appeared as PID 1, or if you wanted the processes inside a container to have small, predictable PID numbers rather than whatever large integers the host's process table happened to assign, you had no mechanism.
+
+PID namespaces, added in Linux 3.8 (2013), solve this by making PID numbers *scoped*. A process can now have a different PID number in different namespaces simultaneously. From the host, it might be PID 34521. From inside its container's PID namespace, it is PID 7. From inside a nested container (if such a thing exists), it might be PID 2. The same physical process, the same `task_struct`, three different integer identifiers depending on which namespace you look from.
+
+This requires a more complex data structure than a simple integer in `task_struct`. The kernel's solution is `struct pid`: an object that holds an array of `(PID number, namespace)` pairs — one per namespace level in the nesting hierarchy. When you ask "what is this process's PID?", you have to specify which namespace you want the answer in. When you kill a process by PID number, you kill it in the namespace that your process belongs to.
+
+The correctness problem that trips up most container authors is what happens at the bottom of the hierarchy: PID 1. In Unix, PID 1 is init — the root of the process tree, the reaper of orphaned processes, the only process that cannot be killed by SIGKILL unless the sender is from an ancestor namespace. Every PID namespace has its own PID 1. If that process exits without a proper init implementation, the entire namespace and all processes in it are torn down. This is why the pause container exists, why tini was invented, and why Kubernetes's default pod structure puts an init process in every sandbox.
+
+This document dissects the three data structures that implement this illusion — `struct pid_namespace`, `struct pid`, and `struct upid` — and explains the one correctness problem that kills more containers than any other: the PID 1 init problem.
 
 ---
 

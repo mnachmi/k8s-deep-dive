@@ -1,5 +1,11 @@
 # 01 — Kubernetes and the Process Model: From kubelet to `task_struct`
 
+## What kubectl apply Actually Creates
+
+When you run `kubectl apply -f pod.yaml`, the Kubernetes control plane schedules a pod onto a node, kubelet receives the PodSpec via its API server watch, calls containerd via gRPC, and containerd invokes runc. By the time the operation is complete, a new entry exists in the kernel's process table: a `task_struct` with a freshly allocated `nsproxy` pointing to new PID, net, UTS, IPC, and mount namespace structs, and a `css_set` pointer that binds the process to the pod's cgroup directory. The pod does not exist until that `task_struct` exists. Everything before that point — YAML parsing, API validation, scheduler placement, kubelet admission — is preparation.
+
+This matters for diagnosis. A pod stuck in `ContainerCreating` has not yet produced a `task_struct`. A pod in `Running` but not responding has a `task_struct` that you can inspect directly with `/proc/<pid>/status`. A pod that exits unexpectedly left a `task_struct` with a non-zero exit code that you can recover from `/proc/<pid>/exit_code` — if you're fast enough before the kernel reaps it. The process table is the authoritative record of what is actually running; everything Kubernetes shows you is derived from it.
+
 This document bridges the kernel internals covered in
 [01-a (task_struct)](../kernel/01-a-task-struct.md),
 [01-b (clone flags)](../kernel/01-b-clone-flags.md), and

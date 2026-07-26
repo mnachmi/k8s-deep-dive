@@ -1,17 +1,25 @@
 # 01-b — `clone()`, `clone3()`, and the Container-Creating Flags
 
-> **Primary source file:**
-> [`kernel/fork.c`](https://elixir.bootlin.com/linux/v6.9/source/kernel/fork.c)
-> (Linux 6.9, x86-64)
->
-> **Syscall entry:**
-> [`kernel/fork.c:3111`](https://elixir.bootlin.com/linux/v6.9/source/kernel/fork.c#L3111) — `SYSCALL_DEFINE5(clone, ...)`
-> [`kernel/fork.c:3178`](https://elixir.bootlin.com/linux/v6.9/source/kernel/fork.c#L3178) — `SYSCALL_DEFINE2(clone3, ...)`
+## Source Files
 
-When runc (or any container runtime) creates a container, it calls `clone3()` with a
-bitmask of `CLONE_NEW*` flags. Those flags are the kernel's instruction sheet for which
-isolation boundaries to erect. This document traces the complete path from the syscall
-boundary down to `copy_process()` and explains every flag a container runtime uses.
+| File | Link |
+|------|------|
+| `kernel/fork.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/fork.c |
+| `include/uapi/linux/sched.h` | https://elixir.bootlin.com/linux/v6.9/source/include/uapi/linux/sched.h |
+| `kernel/pid_namespace.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/pid_namespace.c |
+| `kernel/nsproxy.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/nsproxy.c |
+
+## Process Creation as a Design Problem
+
+Unix has had one process creation syscall since 1969: `fork()`. Its design is elegant in its simplicity — the child is a complete copy of the parent, shares nothing that it does not need to share, and diverges from that point forward. For the original Unix use case (one user, one terminal, programs that spawn shells and editors), this was sufficient for decades.
+
+The problem arrived when Unix systems became multi-user, multi-process, and eventually multi-tenant. `fork()` creates a perfect copy, but "perfect copy" means "same view of the world." The child sees the same filesystem, the same network, the same hostname, the same process table as the parent. If you want the child to have an *isolated* view — to be ignorant of other processes, to have its own network interface, to see a different filesystem root — you need something `fork()` cannot provide.
+
+Linux's answer was `clone()`, introduced with Linux 2.0. Where `fork()` creates a copy that shares everything, `clone()` accepts a bitmask of flags that controls what is shared and what is isolated. `CLONE_VM` says "share the address space" (for threads). `CLONE_NEWNS` says "give the child its own mount tree." `CLONE_NEWPID` says "give the child its own PID namespace." The flags are the knobs that turn a plain `fork()` into a container.
+
+The evolution from `fork()` to `clone()` to `clone3()` is the story of containers being built inside the Linux kernel, incrementally, over twenty years. Google was running containers on Linux before Docker existed, before the word "container" was used in this context. They contributed many of the original namespace patches. Docker popularized the concept. Kubernetes made it the default unit of deployment. But the kernel mechanism underneath all of it is a flag bit in `clone()`.
+
+This document traces the complete path from the `clone3()` syscall boundary down through `copy_process()`, explaining every flag a container runtime uses, when each was added, and why.
 
 ---
 
