@@ -1,5 +1,15 @@
 # 09-c: PSI — `struct psi_group`, `/proc/pressure/*`, Per-cgroup PSI, kubelet Eviction
 
+## Measuring the Pressure That Doesn't Kill You
+
+An OOM kill is visible. The kernel logs it, dmesg records it, the process disappears. But OOM kills are late-stage events — by the time the kernel is killing processes, the system has been degraded for minutes. The real performance problem is the invisible period before the kill: tasks stalling because they cannot allocate memory, page reclaim consuming CPU, applications experiencing microsecond-scale delays that accumulate into latency spikes. The OOM counter is always zero while this is happening.
+
+Johannes Weiner at Facebook observed this pattern in production. Facebook's systems had enough memory that OOM kills were rare, but they still experienced memory pressure events that degraded service latency. There was no way to measure how much of the CPU's time was being wasted waiting for memory, or which cgroup was causing the pressure. The metrics available — free memory, swap usage, OOM count — were all lagging indicators that told you the situation after it had already affected users.
+
+PSI (Pressure Stall Information) was Weiner's solution, merged in Linux 4.20 (December 2018). PSI measures how many tasks are stalled waiting for a resource — memory, CPU, or I/O — at any given moment, and tracks what fraction of wall clock time is lost to those stalls. The metric has two variants: "some" stall (at least one task is stalled) and "full" stall (all non-idle tasks are stalled — the entire CPU is wasted waiting). Full stall is the more severe signal: it means the system is making zero forward progress in the affected cgroup.
+
+Kubernetes 1.22 (2021) added PSI as an eviction signal. kubelet watches `/proc/pressure/memory` and per-cgroup `memory.pressure` files via inotify, comparing the `some avg10` values against configured thresholds. When memory pressure exceeds the threshold, kubelet begins evicting BestEffort pods before the pressure degrades further. This is early eviction — triggered by pressure, not by OOM — the difference between gracefully shedding load and emergency triage.
+
 ## 1. Source Locations
 
 | File | Key Symbols | URL |

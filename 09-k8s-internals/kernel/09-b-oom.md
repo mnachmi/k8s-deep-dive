@@ -1,5 +1,15 @@
 # 09-b: OOM Killer — `struct oom_control`, `oom_badness()`, `memory.events`
 
+## The Decision to Sacrifice One to Save the Rest
+
+In 1991, when Linus Torvalds released the first Linux kernel, running out of memory was a fatal condition. The kernel would attempt to allocate a page, find nothing available, and panic. This was acceptable for a research operating system. It was not acceptable for a production server that might run for months without intervention.
+
+The OOM killer was the kernel's attempt at graceful degradation: when memory allocation fails and reclaim cannot help, instead of halting the machine, find the process most responsible for the memory crisis and kill it. The idea is brutal but sound — one process dies so that all the others can continue. The mechanism was added to Linux in the late 1990s and has been tuned, criticized, and improved ever since.
+
+The hard problem is choosing which process to kill. Kill a critical system process and you've traded an OOM panic for a different kind of system failure. Kill a small, innocent process that happened to be in the wrong cgroup and you've wasted a kill without recovering meaningful memory. The `oom_badness()` function is the kernel's scoring algorithm: it computes a score for each process as a function of its memory footprint (RSS + swap) relative to the total memory in the relevant scope, adjusted by `oom_score_adj`. Higher score means more likely to be killed.
+
+Kubernetes controls `oom_score_adj` deliberately. BestEffort pods get `oom_score_adj = 1000` — they are killed first, always. Burstable pods get values proportional to their memory requests vs limits ratio. Guaranteed pods get `oom_score_adj = -997` — the kernel will kill almost anything else first. This is not a Kubernetes invention; it is a direct mapping onto a kernel mechanism that has existed for decades, now used to implement Kubernetes QoS semantics. Understanding `oom_badness()` is understanding why your BestEffort pods die first when a node runs out of memory, and why your Guaranteed pods survive.
+
 ## 1. Source Locations
 
 | File | Key Symbols | URL |

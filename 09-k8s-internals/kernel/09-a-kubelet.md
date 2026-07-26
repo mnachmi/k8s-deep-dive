@@ -1,4 +1,18 @@
-# 09-a — kubelet Kernel Interface and Pod Sandbox Creation
+# 09-a — kubelet's Kernel Interface and Pod Sandbox Creation
+
+## The Agent at the Boundary
+
+kubelet is the Kubernetes component that lives on every node and translates the control plane's intentions into kernel operations. It is, in a sense, a very sophisticated shell script: receive a PodSpec, create cgroup directories, write resource limits, call the container runtime, write OOM scores, poll health check endpoints, report status back to the API server, and clean up when pods are deleted.
+
+What makes kubelet interesting from a kernel perspective is how thin its interface with the kernel actually is. kubelet does not make unusual syscalls. It does not load kernel modules. It does not use custom kernel interfaces. Its entire kernel interaction is through the VFS — reading and writing files under `/proc/`, `/sys/fs/cgroup/`, and Unix domain sockets. Every pod lifecycle event, from creation to OOM kill detection to graceful termination, is implemented by reading and writing files.
+
+This thinness is not accidental — it is the design principle that makes Kubernetes portable across kernel versions. kubelet can run on Linux 5.4 (the minimum for most cloud providers) or Linux 6.9 because it does not depend on any new kernel ABI beyond the cgroup v2 interface. When a new kernel feature becomes available (like cgroup v2, like PSI, like pidfd), kubelet adds support for it as an optional improvement rather than a hard dependency.
+
+Understanding kubelet's kernel interface means you can:
+- Watch what kubelet is actually doing when a pod starts or stops (strace it)
+- Verify that resource limits were written correctly (read the cgroup files directly)  
+- See why a pod was OOM-killed (check memory.events before kubelet reports it)
+- Understand why OOM score adjustment matters for which process gets killed first
 
 ## 1. Source Locations
 

@@ -1,5 +1,13 @@
 # Chapter 09 — Kubernetes Internals: Kernel Connection
 
+## The Pod Lifecycle as a Kernel Event Sequence
+
+A pod creation event in Kubernetes is not one thing happening. It is a sequence of kernel operations, each with its own failure modes, each visible through its own kernel interface. A pod stuck in `ContainerCreating` might have failed to create its cgroup directory (check kernel log), failed to allocate a namespace (check dmesg), failed the OCI spec validation (check containerd log), or failed the pivot_root into the container rootfs (check mount namespace state). These are different failures at different layers, but they all surface as the same Kubernetes status.
+
+Going deeper into the kernel internals of Kubernetes means learning to diagnose at the layer where the failure actually occurred. kubelet's kernel interface is thin — it reads and writes files under `/proc/` and `/sys/fs/cgroup/`. Every meaningful pod event is a file read or write. A pod being OOM killed is the kernel writing to `memory.events` and kubelet reading it via inotify. A pod being evicted for memory pressure is kubelet reading `/proc/pressure/memory` and finding the PSI `some avg10` value above threshold. A container restart is the kernel sending SIGKILL and containerd detecting the process exit via the cgroup event fd.
+
+Understanding the chapter 09 connection means being able to walk backward from a Kubernetes event to the kernel operation that caused it. The sections below provide that mapping: from pod lifecycle events to kernel syscalls, from resource enforcement to cgroup files, from OOM kills to the `oom_badness()` scoring function.
+
 ## 1. Architecture Overview
 
 Full pod lifecycle — actor and kernel interface at each phase:
