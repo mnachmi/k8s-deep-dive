@@ -6,8 +6,8 @@
 |------|-------------|-----|
 | `arch/x86/include/asm/nmi.h` | `nmi_handler_t`, `register_nmi_handler()`, `NMI_LOCAL`, `NMI_UNKNOWN` | https://elixir.bootlin.com/linux/v6.9/source/arch/x86/include/asm/nmi.h |
 | `arch/x86/kernel/nmi.c` | `do_nmi()`, `nmi_handle()`, NMI handler dispatch | https://elixir.bootlin.com/linux/v6.9/source/arch/x86/kernel/nmi.c |
-| `kernel/watchdog.c` | `watchdog_enable()`, softlockup watchdog kthread | https://elixir.bootlin.com/linux/v6.9/source/kernel/watchdog.c |
-| `kernel/watchdog_hld.c` | hardlockup detector: `watchdog_overflow_callback()` | https://elixir.bootlin.com/linux/v6.9/source/kernel/watchdog_hld.c |
+| `kernel/watchdog.c` | `watchdog_enable()`, `watchdog_timer_fn()`, `is_hardlockup()`, softlockup hrtimer | https://elixir.bootlin.com/linux/v6.9/source/kernel/watchdog.c |
+| `kernel/watchdog_perf.c` | hardlockup detector: `watchdog_overflow_callback()` | https://elixir.bootlin.com/linux/v6.9/source/kernel/watchdog_perf.c |
 | `include/linux/nmi.h` | `touch_nmi_watchdog()`, `touch_softlockup_watchdog()` | https://elixir.bootlin.com/linux/v6.9/source/include/linux/nmi.h |
 
 ## 2. NMI Overview
@@ -32,6 +32,11 @@ typedef int (*nmi_handler_t)(unsigned int type, struct pt_regs *regs);
 #define NMI_SERR     2   // PCI SERR
 #define NMI_IO_CHECK 3   // I/O check
 
+// In Linux 6.9, register_nmi_handler() is a **macro** defined in
+// arch/x86/include/asm/nmi.h. The underlying C function is:
+//   int __register_nmi_handler(unsigned int, struct nmiaction *);
+// where struct nmiaction holds the handler pointer, flags, and name.
+// The macro wraps the nmiaction struct construction automatically.
 int register_nmi_handler(unsigned int type, nmi_handler_t handler,
                          unsigned long flags, const char *name);
 void unregister_nmi_handler(unsigned int type, const char *name);
@@ -41,14 +46,20 @@ All NMI handlers must complete in < ~100 µs. No sleeping, no locks that might b
 
 ## 4. Softlockup Watchdog
 
-The softlockup detector uses a per-CPU high-priority kthread (`watchdog/N`, SCHED_FIFO priority 99). The system timer tick function `update_process_times()` stamps a per-CPU `watchdog_touch_ts` timestamp via `touch_softlockup_watchdog()`. The watchdog kthread resets `watchdog_report_ts`. If the kthread hasn't run for `2 × watchdog_thresh` seconds, a soft lockup is reported:
+The softlockup detector uses a per-CPU **hrtimer** (`watchdog_hrtimer`,
+function `watchdog_timer_fn()` in `kernel/watchdog.c`). The hrtimer fires
+every `watchdog_thresh / 5` seconds (the "sample period"). Each tick:
+1. `touch_softlockup_watchdog()` updates `watchdog_touch_ts` (per-CPU ns timestamp)
+2. `watchdog_timer_fn()` checks if `current` has been running for > `2 × watchdog_thresh`
+   seconds without being scheduled away — indicating a soft lockup
 
+If a soft lockup is detected:
 ```
 BUG: soft lockup - CPU#0 stuck for 22s! [nginx:1234]
 ```
 
 Key sysctls:
-- `kernel.watchdog_thresh` (default 10s) — trigger at `2 × thresh`
+- `kernel.watchdog_thresh` (default 10s) — softlockup triggers at `2 × thresh`
 - `kernel.softlockup_panic` — 0/1 (default 0: print only)
 - `kernel.nmi_watchdog` — 0=disabled, 1=enabled (hardlockup)
 
@@ -60,7 +71,7 @@ The hardlockup detector uses the CPU's PMU (Performance Monitoring Unit) to gene
 NMI watchdog: Watchdog detected hard LOCKUP on cpu 0
 ```
 
-Implementation in `kernel/watchdog_hld.c`:
+Implementation in `kernel/watchdog_perf.c`:
 ```c
 // Per-CPU perf_event configured as:
 //   type = PERF_TYPE_HARDWARE
@@ -69,11 +80,12 @@ Implementation in `kernel/watchdog_hld.c`:
 //   overflow_handler = watchdog_overflow_callback
 
 static void watchdog_overflow_callback(struct perf_event *event,
-                                       struct perf_hw_data *data,
+                                       struct perf_sample_data *data,
                                        struct pt_regs *regs)
 {
-    if (is_hardlockup())
-        watchdog_hardlockup_check(smp_processor_id(), regs);
+    /* NMI fires at ~watchdog_thresh rate via PMU overflow.
+     * If hrtimer hasn't fired recently → hardlockup */
+    watchdog_hardlockup_check(smp_processor_id(), regs);
 }
 ```
 
@@ -108,7 +120,7 @@ ls /proc/$(pgrep -n watchdog)/fd 2>/dev/null
 |--------|------|-----|
 | `register_nmi_handler()` | `arch/x86/include/asm/nmi.h` | https://elixir.bootlin.com/linux/v6.9/source/arch/x86/include/asm/nmi.h |
 | `do_nmi()` | `arch/x86/kernel/nmi.c` | https://elixir.bootlin.com/linux/v6.9/source/arch/x86/kernel/nmi.c |
-| `watchdog_overflow_callback()` | `kernel/watchdog_hld.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/watchdog_hld.c |
+| `watchdog_overflow_callback()` | `kernel/watchdog_perf.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/watchdog_perf.c |
 | `touch_softlockup_watchdog()` | `include/linux/nmi.h` | https://elixir.bootlin.com/linux/v6.9/source/include/linux/nmi.h |
 | `watchdog_enable()` | `kernel/watchdog.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/watchdog.c |
-| `is_hardlockup()` | `kernel/watchdog_hld.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/watchdog_hld.c |
+| `is_hardlockup()` | `kernel/watchdog.c` | https://elixir.bootlin.com/linux/v6.9/source/kernel/watchdog.c |
