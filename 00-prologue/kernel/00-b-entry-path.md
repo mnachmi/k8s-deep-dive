@@ -343,3 +343,31 @@ cat /proc/$CPID/status | grep Seccomp
 | `struct pt_regs` | arch/x86/include/asm/ptrace.h | https://elixir.bootlin.com/linux/v6.9/source/arch/x86/include/asm/ptrace.h |
 | `struct seccomp_data` | include/uapi/linux/seccomp.h | https://elixir.bootlin.com/linux/v6.9/source/include/uapi/linux/seccomp.h |
 | `SWITCH_TO_KERNEL_CR3` | arch/x86/entry/calling.h | https://elixir.bootlin.com/linux/v6.9/source/arch/x86/entry/calling.h |
+
+---
+
+## On ARM64 (Raspberry Pi 5): `SVC #0` → `el0_svc`
+
+Everything above is x86-specific. The mechanism ARM64 uses is architecturally different, though the outcome at the `do_syscall` C layer is identical.
+
+**Instruction:** `SVC #0` (Supervisor Call) instead of `SYSCALL`. The `SVC` instruction causes an exception — not a fast-path MSR-guided jump. The CPU saves the return PC to `ELR_EL1` and the processor state to `SPSR_EL1`, then indexes into the vector table at `VBAR_EL1 + 0x400` (the synchronous EL0 exception slot).
+
+**Exception vector vs IDT:** x86 uses the IDT (Interrupt Descriptor Table) for all exceptions including system calls; `LSTAR` MSR is a special fast path bypassing the IDT for syscalls. ARM64 has `VBAR_EL1` — a single base address for all 16 exception vectors. There is no equivalent of `LSTAR`; the `SVC` instruction always goes through the vector table.
+
+**Register convention:** x86 puts the syscall number in `RAX`. ARM64 puts it in `x8`. Arguments use `x0`–`x7` (8 registers) vs x86's `rdi/rsi/rdx/r10/r8/r9` (6 registers with the `r10` quirk).
+
+**No KPTI on ARM64:** x86 needs Kernel Page Table Isolation (`SWITCH_TO_KERNEL_CR3` / `SWITCH_TO_USER_CR3`) on every syscall entry/exit because Meltdown allows reading kernel memory from user mode via speculative execution. ARM64 separates user and kernel page tables at the hardware level via `TTBR0_EL1` (user) and `TTBR1_EL1` (kernel) — two registers, always pointing to independent page tables. The CPU never speculatively reads kernel addresses while executing at EL0. No KPTI needed, no CR3 switch overhead.
+
+**The ARM64 syscall path:**
+```
+SVC #0
+  → CPU saves PC to ELR_EL1, PSTATE to SPSR_EL1
+  → CPU jumps to VBAR_EL1 + 0x400 (el0_sync in arch/arm64/kernel/entry.S)
+  → el0_sync: reads ESR_EL1 to classify exception type
+  → branch to el0_svc
+  → el0_svc: calls do_el0_svc() in arch/arm64/kernel/syscall.c
+  → do_el0_svc: reads x8 (syscall number), dispatches sys_call_table[x8]
+  → return value written to x0, eret back to EL0
+```
+
+**Full ARM64 coverage:** `kernel/13-a-arm64-syscall.md` — el0_svc, VBAR_EL1, EL0-EL3 model, syscall number mapping table.

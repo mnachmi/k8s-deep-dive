@@ -416,3 +416,19 @@ bpftrace -e 'kprobe:do_swap_page {
 | `find_vma()` | `mm/mmap.c` | [link](https://elixir.bootlin.com/linux/v6.9/source/mm/mmap.c) | Look up a VMA by virtual address in mm_mt |
 | `mmput()` | `kernel/fork.c` | [link](https://elixir.bootlin.com/linux/v6.9/source/kernel/fork.c) | Decrement mm_users; tear down address space at zero |
 | `__mmdrop()` | `kernel/fork.c` | [link](https://elixir.bootlin.com/linux/v6.9/source/kernel/fork.c) | Free mm_struct when mm_count reaches zero |
+
+---
+
+## On ARM64: TTBR0/TTBR1 Split and No KPTI
+
+The page table machinery described above — `mm_struct`, `vm_area_struct`, the four-level PGD→PUD→PMD→PTE hierarchy, `handle_mm_fault()` — is architecture-independent. The hardware mechanism that walks those tables differs significantly.
+
+**x86: One CR3, KPTI required.** On x86, CR3 points to the active page table. Kernel and user space share a single address space, with the kernel mapped in the upper half. Meltdown (CVE-2017-5754) demonstrated that speculative execution at Ring 3 could read kernel memory via a timing side channel. The fix — Kernel Page Table Isolation — switches CR3 on every syscall entry/exit: user-mode CR3 contains only a minimal kernel stub; kernel-mode CR3 contains the full kernel mapping. Every syscall costs two CR3 writes plus a TLB flush (or PCID invalidation).
+
+**ARM64: Two registers, hardware-enforced split.** ARM64 has `TTBR0_EL1` (Translation Table Base Register 0) for user-space addresses (bit 55 = 0, range `0x0000_0000_0000_0000`→`0x0000_FFFF_FFFF_FFFF`) and `TTBR1_EL1` for kernel addresses (bit 55 = 1, range `0xFFFF_0000_0000_0000`→`0xFFFF_FFFF_FFFF_FFFF`). The CPU selects the register based on the address's bit 55 — no software switch needed. Meltdown cannot occur because the CPU's speculative engine will not walk `TTBR1_EL1` while executing at EL0 — the hardware enforces the boundary. KPTI is not compiled in for ARM64 kernels.
+
+**Practical consequence for Kubernetes on RPi5:** Every system call on a Kubernetes node running on x86 pays the KPTI CR3 switch cost. On ARM64 (RPi5), this cost does not exist. For syscall-heavy workloads — many small I/O operations, frequent `epoll_wait()` returns — ARM64 has a structural advantage at this level.
+
+**Memory model difference:** x86 enforces Total Store Order (TSO) — stores to different addresses become visible to other CPUs in program order. ARM64 uses RVWMO (Relaxed Virtual Memory Ordering) — stores may become visible out of order. Code that relies on x86 TSO ordering without explicit barriers (`smp_mb()`, `smp_wmb()`) is subtly wrong on ARM64, producing races that never appear on x86.
+
+**Full ARM64 coverage:** `kernel/13-b-arm64-memory.md` — TTBR0/TTBR1, ASID vs PCID, RVWMO vs TSO, `dsb`/`dmb` barriers.

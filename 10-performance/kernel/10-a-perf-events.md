@@ -170,3 +170,32 @@ ls /sys/bus/event_source/devices/
 | `struct hw_perf_event` | `include/linux/perf_event.h` | https://elixir.bootlin.com/linux/v6.9/source/include/linux/perf_event.h |
 | `struct pmu` (PMU driver vtable) | `include/linux/perf_event.h` | https://elixir.bootlin.com/linux/v6.9/source/include/linux/perf_event.h |
 | `x86_pmu_enable_event()` | `arch/x86/events/core.c` | https://elixir.bootlin.com/linux/v6.9/source/arch/x86/events/core.c |
+
+---
+
+## On ARM64: ARM PMUv3, `mrs` Instruction, Same `perf_event_open` API
+
+The `perf_event_open(2)` system call, `struct perf_event_attr`, and everything from the kernel's `kernel/events/core.c` described above are architecture-independent. What changes on ARM64 (Raspberry Pi 5) is the hardware implementation underneath.
+
+**x86 PMU: MSR-based.** x86 hardware performance counters are accessed via Model Specific Registers. `RDMSR` reads them; `WRMSR` writes them. The Linux x86 PMU driver (`arch/x86/events/core.c`, `arch/x86/events/intel/core.c`) issues `RDMSR`/`WRMSR` instructions in Ring 0 to program and read counters. Event codes differ between Intel and AMD and across CPU generations (Intel vs AMD event codes for LLC misses are completely different numbers).
+
+**ARM64 PMU: System registers, `mrs` instruction.** ARM64 accesses performance monitoring through a set of architecturally-defined system registers read with `mrs` (Move from System Register). Key registers:
+
+| Register | Description | x86 equivalent |
+|----------|-------------|----------------|
+| `PMCCNTR_EL0` | 64-bit cycle counter | `IA32_TIME_STAMP_COUNTER` (RDTSC) |
+| `PMCR_EL0` | PMU control: enable, reset, counter count | `IA32_PERF_GLOBAL_CTRL` |
+| `PMEVCNTR<n>_EL0` | Event counter n (up to 31) | `IA32_PMC<n>` (MSR 0x0C1+n) |
+| `PMEVTYPER<n>_EL0` | Event type for counter n | `IA32_PERFEVTSEL<n>` (MSR 0x186+n) |
+
+**User-space PMU access:** On both architectures, the kernel sets a flag allowing user-mode applications to read PMU counters directly without a syscall — eliminating the overhead of reading a counter. On x86 this is done via `RDPMC` instruction (enabled by CR4.PCE). On ARM64, the kernel sets `PMUSERENR_EL0.EN=1`, enabling direct `mrs pmccntr_el0` from EL0. After `perf_event_open()` creates a cycle counter event, the application can read the cycle counter via `mrs` at near-zero overhead — no system call, no mode switch.
+
+**ARM64 PMU event codes (ARMv8 architectural, Cortex-A76):**
+- `CPU_CYCLES` = 0x11 (equivalent: `perf stat -e cycles`)
+- `INST_RETIRED` = 0x08 (equivalent: `perf stat -e instructions`)
+- `L1D_CACHE_REFILL` = 0x03 (equivalent: `perf stat -e cache-misses`)
+- `STALL_FRONTEND` = 0x23, `STALL_BACKEND` = 0x24 (no direct x86 equivalent)
+
+**Same perf commands work:** `perf stat -e cycles,instructions,cache-misses` runs identically on x86 and ARM64. The Linux perf tool maps symbolic event names to architecture-specific codes at runtime. `bpftrace` hardware probe events (`hardware:cpu-cycles:1000`) work the same way.
+
+**Full ARM64 coverage:** `kernel/13-c-arm64-pmu.md` — full register table, Cortex-A76 event codes, bpftrace on ARM64, user-mode PMU access via `mrs`.

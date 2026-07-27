@@ -189,3 +189,26 @@ tracepoint:syscalls:sys_enter_clone3 {
 | `sys_clone3` | kernel/fork.c | https://elixir.bootlin.com/linux/v6.9/source/kernel/fork.c |
 | `sys_setns` | kernel/nsproxy.c | https://elixir.bootlin.com/linux/v6.9/source/kernel/nsproxy.c |
 | `array_index_nospec` | include/linux/nospec.h | https://elixir.bootlin.com/linux/v6.9/source/include/linux/nospec.h |
+
+---
+
+## On ARM64: Different Table, Different Numbers, Same Syscall API
+
+The x86-64 syscall table (`syscall_64.tbl`) preserves historical numbering for binary compatibility — `read` is 0, `write` is 1, `open` is 2, because those numbers were assigned in 1991 and cannot change without breaking every x86 ELF binary ever compiled. ARM64 was designed later with the "generic" syscall table (`include/uapi/asm-generic/unistd.h`), deliberately numbered to avoid legacy constraints.
+
+| Syscall | x86-64 | ARM64 | Note |
+|---------|--------|-------|------|
+| `read` | 0 | 63 | ARM64 uses generic POSIX numbering |
+| `write` | 1 | 64 | |
+| `open` | 2 | (→ `openat` = 56) | ARM64 has no `open`, only `openat` |
+| `mmap` | 9 | 222 | |
+| `clone` | 56 | 220 | |
+| `execve` | 59 | 221 | |
+
+**Kernel tables:**
+- x86-64: `arch/x86/entry/syscalls/syscall_64.tbl` → generated `arch/x86/kernel/syscall_64.c`
+- ARM64: `include/uapi/asm-generic/unistd.h` → `arch/arm64/kernel/sys.c`
+
+**The Kubernetes-relevant implication:** `strace` translates syscall numbers to names transparently. `seccomp` filters in container runtimes (containerd's default seccomp profile) list syscalls by name — the profiles are architecture-independent at the source level. At the kernel level, a seccomp filter for ARM64 is compiled with ARM64 numbers. The same container image on x86 and ARM64 uses different underlying number sets, all abstracted by the toolchain.
+
+**Full ARM64 coverage:** `kernel/13-a-arm64-syscall.md` — complete ARM64 syscall number table, `el0_svc` dispatch path.

@@ -191,3 +191,35 @@ grep steal /proc/stat
 | `vmx_vcpu_run()` | `arch/x86/kvm/vmx/vmx.c` | https://elixir.bootlin.com/linux/v6.9/source/arch/x86/kvm/vmx/vmx.c |
 | `EXIT_REASON_*` | `arch/x86/include/asm/vmx.h` | https://elixir.bootlin.com/linux/v6.9/source/arch/x86/include/asm/vmx.h |
 | `/dev/kvm` ioctl interface | `Documentation/virt/kvm/api.rst` | https://elixir.bootlin.com/linux/v6.9/source/Documentation/virt/kvm/api.rst |
+
+---
+
+## On ARM64: EL2 Instead of Intel VT-x
+
+KVM on ARM64 (Raspberry Pi 5 with `--enable-kvm` in QEMU, or cloud ARM64 VMs) uses the ARM64 exception level model instead of Intel VT-x. The concepts are the same; the hardware differs substantially.
+
+**Intel VT-x:** Adds two new CPU modes — VMX root (host) and VMX non-root (guest). Both run in Ring 0/3. The VMCS (Virtual Machine Control Structure) holds guest/host state. `VMLAUNCH`/`VMRESUME` enter the guest; any controlled event causes a VM exit back to the host exit handler.
+
+**ARM64 KVM:** Uses exception level 2 (EL2) as the hypervisor level. The host Linux kernel runs at EL1 when KVM is active (not EL2 — KVM occupies EL2 as a thin stub, and the host kernel runs at EL1 with a special `HYP` mapping). Guest kernel also runs at EL1. Guest user processes run at EL0 (inside the VM). The boundary between host and guest is enforced by EL2 trap configuration.
+
+```
+ARM64 KVM hierarchy:
+  EL2 — KVM hypervisor stub (tiny — just handles traps)
+  EL1 — Host Linux kernel (with HYP_STUB_VBAR tricks)
+  EL1 — Guest Linux kernel (inside VM, same EL)
+  EL0 — Guest user processes / Host user processes
+```
+
+**VM entry/exit on ARM64:** Instead of `VMLAUNCH`/`VMRESUME` + VMCS, ARM64 uses:
+- `HVC` (Hypervisor Call) instruction: EL1 → EL2 (equivalent of x86 VMRESUME)
+- EL2 trap control: `HCR_EL2` register configures which guest EL1 operations trap to EL2
+
+**What this means for KVM Kubernetes nodes on ARM64:**
+- Steal time works identically — `CPUTIME_STEAL`, `/proc/stat` field 8
+- virtio is identical — virtio spec is hardware-independent
+- EPT equivalent: ARM64 uses **Stage 2 translation** (IPA → PA) via `VTTBR_EL2` instead of Intel EPT. Same two-level address walk concept, different register name.
+- VPID equivalent: ARM64 uses **VMID** (Virtual Machine ID, 16-bit) in `VTTBR_EL2` instead of Intel VPID
+
+The kube-inspect `--virt` flag detects hypervisor presence via `/sys/bus/virtio` and DMI on both x86 and ARM64. Steal time and balloon detection read `/proc/stat` and `/proc/meminfo` — both architecture-independent.
+
+**Full ARM64 hypervisor coverage:** `13-rpi5-lab/kernel/13-a-arm64-syscall.md` (EL0-EL3 model), `13-rpi5-lab/k8s/13-k8s-connection.md` (KVM on ARM64 in the cluster context).
