@@ -78,7 +78,7 @@ This requires per-cgroup accounting of every page. The memory controller hooks i
 ### struct mem_cgroup
 
 ```c
-// mm/memcontrol.h (simplified — see source for full struct)
+// include/linux/memcontrol.h (simplified — see source for full struct)
 struct mem_cgroup {
     struct cgroup_subsys_state css;  /* must be first */
 

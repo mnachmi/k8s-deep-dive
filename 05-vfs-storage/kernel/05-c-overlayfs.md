@@ -10,8 +10,7 @@ OverlayFS is structurally simple. It takes a stack of read-only directory trees 
 
 Deleting a file in OverlayFS does not delete it from the read-only lower layer — it cannot, because those layers are immutable and may be shared. Instead, OverlayFS creates a whiteout entry in the upper layer: a device file with major/minor 0/0 at the same path. The VFS lookup path checks for whiteouts and treats them as ENOENT. This is why removing a file inside a running container does not reduce the size of the image layers. It is also why Dockerfiles that install-then-delete packages in separate RUN steps do not produce smaller images — the delete becomes a whiteout in a later layer while the original files remain in the earlier layer, both present in the final image tarball.
 
-OverlayFS is the filesystem that makes container images work. It stacks multiple read-only directory trees (image layers) under a single writable layer and presents a unified merged view to the container. Every `docker pull`, every OCI image, every running container rootfs is backed by an OverlayFS mount. Understanding its kernel implementation explains why containers start in milliseconds, why copy-on-write can stall writes to large files, and why a deleted file in a container doesn't vanish
-from the image.
+OverlayFS is the filesystem that makes container images work. It stacks multiple read-only directory trees (image layers) under a single writable layer and presents a unified merged view to the container. Every `docker pull`, every OCI image, every running container rootfs is backed by an OverlayFS mount. Understanding its kernel implementation explains why containers start in milliseconds, why copy-on-write can stall writes to large files, and why a deleted file in a container doesn't vanish from the image.
 
 ---
 

@@ -55,7 +55,7 @@ struct mnt_namespace {
     spinlock_t               ns_binfmt_lock;
     struct rb_root           mounts;    /* rbtree of all mounts keyed by mnt_id */
     struct mount            *root;      /* root mount of this namespace */
-    unsigned int             mounts;    /* total mount count */
+    unsigned int             nr_mounts; /* total mount count */
     seqlock_t                lock;      /* protects list iteration */
     u64                      seq;       /* sequence number for pending notifications */
     wait_queue_head_t        poll;      /* fanotify/inotify waiters */
@@ -74,7 +74,7 @@ Field-by-field breakdown:
 
 - **`list`** (`struct list_head`): Head of the doubly-linked list threading all `struct mount` objects that belong to this namespace. The kernel iterates this list to implement `getmntent(3)`, `findmnt(8)`, and `/proc/mounts`.
 
-- **`mounts`** (`unsigned int`): Running count of mounted filesystems in this namespace. Checked against the per-user-namespace limit `sysctl_mount_max` on each new mount to prevent unbounded resource consumption.
+- **`nr_mounts`** (`unsigned int`): Running count of mounted filesystems in this namespace. Checked against the per-user-namespace limit `sysctl_mount_max` on each new mount to prevent unbounded resource consumption.
 
 - **`lock`** (`seqlock_t`): Reader-writer lock using sequence numbers. Writers (mount/umount operations) increment the sequence before and after the change; readers retry if the sequence changes during their read. This lets the kernel walk the mount list without taking a heavyweight lock on every read.
 

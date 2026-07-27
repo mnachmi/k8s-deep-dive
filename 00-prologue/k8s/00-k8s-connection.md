@@ -93,52 +93,76 @@ containerd-shim calls: execve("/usr/bin/runc", ["runc", "create", ...], envp)
 
 ### Phase 7: runc — the Kernel-Intensive Phase
 
-This is where the containers are actually created. runc reads the OCI spec and issues a precise sequence of syscalls. Observed with `strace -f` on a real pod creation:
+This is where containers are actually created. A Kubernetes pod uses a **two-stage model**: runc runs first for the *pause* (sandbox) container, which creates the pod's shared namespaces, then runs again for each *app container*, which joins those namespaces rather than creating new ones.
+
+#### Stage 7a: pause container — creating the pod's shared namespaces
+
+The pause container's only job is to create and hold open the network and IPC namespaces for the pod's lifetime. If it exits, the pod's network namespace disappears. runc issues this sequence for the pause container:
 
 ```
 1.  unshare(CLONE_NEWNS)
-        # Detach from the current mount namespace. This is necessary before
-        # any bind mounts so that subsequent mount() calls do not affect the
-        # host's namespace.
+        # Detach from the current mount namespace so subsequent mount() calls
+        # do not affect the host's namespace.
 
 2.  mount("none", "/", NULL, MS_PRIVATE|MS_REC, NULL)
-        # Make all mounts in the new namespace private (no propagation to host).
+        # Make all mounts private (no propagation to host).
 
-3.  mount(rootfs, rootfs, "bind", MS_BIND|MS_REC, NULL)
-        # Bind-mount the container's rootfs (the OCI image overlay) over itself.
-        # This is the trick that makes pivot_root work.
-
-4.  [many bind mounts]
-        # /dev, /proc, /sys, /etc/hostname, /etc/resolv.conf, secrets, configmaps —
-        # all bind-mounted into the container's filesystem tree.
-
-5.  pivot_root(new_root, put_old)
-        # Replace the current mount namespace's root with the container's rootfs.
-        # After this, "/" inside the container is the OCI image's filesystem.
-        # The host's old root is available at put_old (briefly, then unmounted).
-
-6.  umount2(put_old, MNT_DETACH)
-        # Remove the host root from the container's view.
+3–6. [mount rootfs, bind-mount /dev /proc /sys etc., pivot_root, umount old root]
+        # Same filesystem setup as any container.
 
 7.  clone3(&cl_args, sizeof(cl_args))
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━
-        # THIS IS THE MOMENT THE CONTAINER IS BORN.
+        # PAUSE CONTAINER IS BORN — creates the pod's shared namespaces.
         # ━━━━━━━━━━━━━━━━━━━━━━━━━━
         where cl_args.flags =
-            CLONE_NEWPID    # new PID namespace: this process becomes PID 1
+            CLONE_NEWPID    # new PID namespace: pause becomes PID 1
           | CLONE_NEWNET    # new network namespace: empty (CNI plugin wires it)
-          | CLONE_NEWIPC    # new IPC namespace: isolated SysV IPC tables
-          | CLONE_NEWUTS    # new UTS namespace: can have its own hostname
+          | CLONE_NEWIPC    # new IPC namespace: shared by all pod containers
+          | CLONE_NEWUTS    # new UTS namespace: pod hostname
           | CLONE_NEWCGROUP # new cgroup namespace (virtualized cgroup view)
-          | CLONE_NEWUSER   # (if user namespaces enabled)
 
-8.  [in the child: execve("/bin/nginx", argv, envp)]
+8.  [in the child: execve("/pause", [], envp)]
+        # The pause binary does nothing but sleep(∞) — it exists only to keep
+        # the namespace fds open.
+```
+
+After the pause container is created, the CNI plugin runs `setns()` into the new network namespace and creates the `eth0` interface, IP address, and routing table that all pod containers will share.
+
+#### Stage 7b: app containers — joining the shared namespaces
+
+For each app container (nginx, sidecar, etc.), runc invokes a different sequence. The network and IPC namespaces already exist in the pause container — app containers join them via `setns()` rather than creating new ones:
+
+```
+1–6. [same mount namespace setup: unshare, pivot_root, bind mounts]
+
+7a. setns(net_ns_fd, CLONE_NEWNET)
+        # Join the pause container's existing network namespace.
+        # net_ns_fd is opened from /proc/<pause_pid>/ns/net.
+        # After this, the process shares eth0 and the pod IP.
+
+7b. setns(ipc_ns_fd, CLONE_NEWIPC)
+        # Join the pause container's IPC namespace.
+        # SysV semaphores and shared memory are shared within the pod.
+
+8.  clone3(&cl_args, sizeof(cl_args))
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━
+        # APP CONTAINER IS BORN.
+        # ━━━━━━━━━━━━━━━━━━━━━━━━━━
+        where cl_args.flags =
+            CLONE_NEWPID    # new PID namespace: this process becomes PID 1 in its own ns
+          | CLONE_NEWNS     # new mount namespace: container's own filesystem view
+          | CLONE_NEWUTS    # new UTS namespace
+          | CLONE_NEWCGROUP # new cgroup namespace
+          # NOTE: no CLONE_NEWNET — net namespace is already set by setns() above
+          # NOTE: no CLONE_NEWIPC — ipc namespace is already set by setns() above
+
+9.  [in the child: execve("/bin/nginx", argv, envp)]
         # Replace the child's memory image with the actual container binary.
 ```
 
-Steps 1–6 set up the container's filesystem in the current process's namespace. Step 7 is the actual container process creation — a new `task_struct` is allocated, a new `nsproxy` is populated with fresh namespace pointers, and the new process becomes PID 1 in its own PID namespace. Step 8 loads the actual container binary.
+The `clone3()` call (for both pause and app containers) passes through the kernel entry path covered in `00-b-entry-path.md`. The copy_process() chain is the same in both cases — only the namespace flags differ.
 
-The `clone3()` call passes through the kernel entry path covered in `00-b-entry-path.md`:
+Each `clone3()` call (pause or app container) passes through the kernel entry path covered in `00-b-entry-path.md`:
 
 ```
 rax = 435 (clone3 syscall number)
@@ -151,7 +175,10 @@ syscall instruction
       → kernel_clone()                        (kernel/fork.c:2979)
           → copy_process()                    (kernel/fork.c:2105)
               ├── dup_task_struct()           — allocate new task_struct from slab
-              ├── copy_namespaces()           — create new nsproxy + namespace structs
+              ├── copy_namespaces()           — create new nsproxy; for each CLONE_NEW* flag
+              │                                 a fresh namespace struct is allocated;
+              │                                 for join-only namespaces (setns path),
+              │                                 the existing struct pointer is reused
               ├── copy_mm()                   — COW the address space
               ├── alloc_pid()                 — allocate PID 1 in the new PID ns
               └── wake_up_new_task()          — enqueue in the CFS scheduler
@@ -161,7 +188,7 @@ After `clone3()` returns:
 - In the **parent** (runc): returns the child's host PID. runc writes this PID to the pod cgroup (`/sys/fs/cgroup/kubepods/.../<container-id>/cgroup.procs`), establishing resource limits.
 - In the **child** (the container process): returns 0. The child calls `execve()` to load the container binary.
 
-At this point, the container process exists as an ordinary `struct task_struct` with a `nsproxy` pointing to fresh namespace structs and a `css_set` pointing into the pod's cgroup tree.
+At this point, the container process exists as an ordinary `struct task_struct` with a `nsproxy` pointing to its namespace structs — new ones for CLONE_NEW* flags, shared pointers for namespaces joined via `setns()` — and a `css_set` pointing into the pod's cgroup tree.
 
 ---
 
@@ -232,12 +259,23 @@ You will see output like:
 ```
 [pid 12345] clone3({flags=CLONE_VM|CLONE_FS|CLONE_FILES|CLONE_THREAD|...}, 88) = 12346
 [pid 12346] execve("/usr/bin/containerd-shim-runc-v2", ...) = 0
-[pid 12346] clone3({flags=CLONE_NEWPID|CLONE_NEWNET|CLONE_NEWNS|CLONE_NEWUTS|CLONE_NEWIPC}, 88) = 12347
+
+# Stage 7a: pause container — creates the pod's shared net/IPC namespaces
+[pid 12346] clone3({flags=CLONE_NEWPID|CLONE_NEWNET|CLONE_NEWNS|CLONE_NEWUTS|CLONE_NEWIPC|CLONE_NEWCGROUP}, 88) = 12347
 [pid 12347] pivot_root(".", ".pivot_root") = 0
-[pid 12347] execve("/bin/sleep", ["sleep", "60"], ...) = 0
+[pid 12347] execve("/pause", ["/pause"], ...) = 0  # pause sleeps forever
+
+# CNI plugin runs here: setns into net ns 12347, creates eth0 + assigns pod IP
+
+# Stage 7b: app container — joins existing net/IPC namespaces via setns()
+[pid 12346] setns(net_ns_fd, CLONE_NEWNET) = 0   # join pause's net namespace
+[pid 12346] setns(ipc_ns_fd, CLONE_NEWIPC) = 0   # join pause's IPC namespace
+[pid 12346] clone3({flags=CLONE_NEWPID|CLONE_NEWNS|CLONE_NEWUTS|CLONE_NEWCGROUP}, 88) = 12348
+[pid 12348] pivot_root(".", ".pivot_root") = 0
+[pid 12348] execve("/bin/sleep", ["sleep", "60"], ...) = 0
 ```
 
-The `[pid 12347]` process that calls `execve("/bin/sleep", ...)` is the container. PID 12347 is its **host PID** — it is visible in `ps aux` on the node.
+The `[pid 12348]` process that calls `execve("/bin/sleep", ...)` is the app container. PID 12348 is its **host PID** — visible in `ps aux` on the node. Note that it does NOT have `CLONE_NEWNET` in its flags — it shares the network namespace with `pid 12347` (the pause container) via `setns()`.
 
 ### Experiment 2: bpftrace — observe the moment of container birth
 
@@ -320,10 +358,12 @@ kubectl run nginx
                                                  └─ containerd: clone(SIGCHLD) → shim
                                                              └─ shim: execve(runc)
                                                                  │
-                                                                 ├─ unshare(CLONE_NEWNS)
-                                                                 ├─ mount() × N
-                                                                 ├─ pivot_root()
-                                                                 └─ clone3(CLONE_NEWPID|NEWNET|...) ← CONTAINER IS BORN
+                                                                 ├─ [pause] unshare, mount×N, pivot_root
+                                                                 ├─ [pause] clone3(CLONE_NEWPID|NEWNET|NEWIPC|...) ← PAUSE BORN
+                                                                 ├─ CNI plugin: setns(net_ns) → create eth0 + IP
+                                                                 ├─ [app]   unshare, mount×N, pivot_root
+                                                                 ├─ [app]   setns(net_ns) + setns(ipc_ns)
+                                                                 └─ [app]   clone3(CLONE_NEWPID|NEWNS|...) ← APP BORN
                                                                          │
                                                                          ├─ copy_process() allocates task_struct
                                                                          ├─ copy_namespaces() creates nsproxy

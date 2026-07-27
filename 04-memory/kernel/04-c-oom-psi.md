@@ -57,7 +57,7 @@ The distinction between the two OOM paths matters operationally:
 
 Source: [mm/oom_kill.c](https://elixir.bootlin.com/linux/v6.9/source/mm/oom_kill.c)
 
-Before the kernel can kill anything, it must choose which process to sacrifice. The scoring function `oom_badness()` computes a single integer (0–1000) for each candidate:
+Before the kernel can kill anything, it must choose which process to sacrifice. The scoring function `oom_badness()` computes a raw page-count score for each candidate (the caller normalises to 0–1000 for `/proc/<pid>/oom_score`):
 
 ```
 oom_badness(task, totalpages)
@@ -68,10 +68,12 @@ oom_badness(task, totalpages)
   ├─ adj = task->signal->oom_score_adj    // userspace adjustment (-1000 to +1000)
   │
   ├─ [adj == OOM_SCORE_ADJ_MIN (-1000)]
-  │    return 0   // never kill — exempt from OOM selection
+  │    return LONG_MIN   // never kill — exempt from OOM selection
   │
-  └─ points += points * adj / 1000      // scale: adj=+1000 doubles score, adj=-999 nearly zeroes it
-       badness = points * 1000 / totalpages   // normalise to 0-1000 range
+  └─ adj *= totalpages / 1000          // scale adj to page units:
+       points += adj                   //   adj=+1000 adds ~totalpages (big boost to large processes)
+       return points                   //   adj=-999 nearly zeroes the score
+                                       // caller: oom_score = points * 1000 / totalpages → 0-1000
 ```
 
 The process with the highest `badness` score is selected. The formula rewards killing large-RSS processes (which free the most memory) and processes that have opted in to being killed first via a high `oom_score_adj`.

@@ -190,11 +190,11 @@ The `perf_event_open(2)` system call, `struct perf_event_attr`, and everything f
 
 **User-space PMU access:** On both architectures, the kernel sets a flag allowing user-mode applications to read PMU counters directly without a syscall — eliminating the overhead of reading a counter. On x86 this is done via `RDPMC` instruction (enabled by CR4.PCE). On ARM64, the kernel sets `PMUSERENR_EL0.EN=1`, enabling direct `mrs pmccntr_el0` from EL0. After `perf_event_open()` creates a cycle counter event, the application can read the cycle counter via `mrs` at near-zero overhead — no system call, no mode switch.
 
-**ARM64 PMU event codes (ARMv8 architectural, Cortex-A76):**
+**ARM64 PMU event codes (Cortex-A76 specific; implementation-defined per ARMv8 core):**
 - `CPU_CYCLES` = 0x11 (equivalent: `perf stat -e cycles`)
 - `INST_RETIRED` = 0x08 (equivalent: `perf stat -e instructions`)
 - `L1D_CACHE_REFILL` = 0x03 (equivalent: `perf stat -e cache-misses`)
-- `STALL_FRONTEND` = 0x23, `STALL_BACKEND` = 0x24 (no direct x86 equivalent)
+- `STALL_FRONTEND` = 0x23, `STALL_BACKEND` = 0x24 (Cortex-A76 specific; no direct x86 equivalent)
 
 **Same perf commands work:** `perf stat -e cycles,instructions,cache-misses` runs identically on x86 and ARM64. The Linux perf tool maps symbolic event names to architecture-specific codes at runtime. `bpftrace` hardware probe events (`hardware:cpu-cycles:1000`) work the same way.
 
