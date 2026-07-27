@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/linux-to-k8s/kube-inspect/internal/arch"
 	"github.com/linux-to-k8s/kube-inspect/internal/cgroup"
 	"github.com/linux-to-k8s/kube-inspect/internal/ebpf"
 	"github.com/linux-to-k8s/kube-inspect/internal/health"
@@ -15,6 +16,7 @@ import (
 	"github.com/linux-to-k8s/kube-inspect/internal/netns"
 	"github.com/linux-to-k8s/kube-inspect/internal/proc"
 	"github.com/linux-to-k8s/kube-inspect/internal/sched"
+	"github.com/linux-to-k8s/kube-inspect/internal/virt"
 )
 
 var (
@@ -31,12 +33,14 @@ var (
 	flagPressure   = flag.Bool("pressure", false, "Show node PSI and pod memory.events (requires --pod for pod events)")
 	flagPerf       = flag.Bool("perf", false, "Show CPU throttle stats and scheduler latency per process (requires --pod)")
 	flagHealth     = flag.Bool("health", false, "Show kernel version, taint flags, watchdog and panic config, kdump state")
+	flagVirt       = flag.Bool("virt", false, "Show KVM hypervisor status: steal time, balloon pages, virtio devices (ch12)")
+	flagArch       = flag.Bool("arch", false, "Show CPU architecture info: ARM64 exception levels, PMU, memory model (ch13)")
 )
 
 func main() {
 	flag.Parse()
-	if *flagPod == "" && !*flagNode && !*flagHealth {
-		fmt.Fprintln(os.Stderr, "usage: kube-inspect --pod <uid> [--namespaces] [--cgroup] [--psi] [--mounts] [--netns] [--ebpf] [--sched] [--pressure] [--perf] [--health] [--json]")
+	if *flagPod == "" && !*flagNode && !*flagHealth && !*flagVirt && !*flagArch {
+		fmt.Fprintln(os.Stderr, "usage: kube-inspect --pod <uid> [--namespaces] [--cgroup] [--psi] [--mounts] [--netns] [--ebpf] [--sched] [--pressure] [--perf] [--health] [--virt] [--arch] [--json]")
 		os.Exit(1)
 	}
 
@@ -297,6 +301,24 @@ func main() {
 				fmt.Printf("  kdump:            not loaded\n")
 			}
 			fmt.Println()
+		}
+	}
+
+	if *flagVirt {
+		r, err := virt.Gather()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "virt: %v\n", err)
+		} else {
+			r.Print()
+		}
+	}
+
+	if *flagArch {
+		r, err := arch.Gather()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "arch: %v\n", err)
+		} else {
+			r.Print()
 		}
 	}
 }
