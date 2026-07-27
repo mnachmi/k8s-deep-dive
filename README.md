@@ -6,7 +6,7 @@ The reason those problems are hard to diagnose from the Kubernetes layer is that
 
 This course builds your mastery of Linux kernel internals and shows how Kubernetes leverages them. You will read kernel source, write syscall-level C and Go, debug cgroup hierarchies, and trace system behavior with eBPF. By the end, you will see through Kubernetes abstractions to the kernel syscalls underneath.
 
-Every chapter teaches a Linux kernel mechanism from scratch with kernel source precision, then shows exactly how Kubernetes uses it, then builds one capability into `kube-inspect` — a per-pod performance diagnostic daemon you build incrementally across all 11 chapters.
+Every chapter teaches a Linux kernel mechanism from scratch with kernel source precision, then shows exactly how Kubernetes uses it, then builds one capability into `kube-inspect` — a per-pod performance diagnostic daemon you build incrementally across all 13 chapters.
 
 **This is not a refresher course — kernel fundamentals *are* the course.**
 
@@ -128,6 +128,8 @@ Each chapter is self-contained. Start with Chapter 00 and proceed in order — l
 | **09** | **Kubernetes Internals** | kubelet VFS interface, OOM killer, PSI | Pod lifecycle, eviction, crash detection | `--pressure` |
 | **10** | **Performance** | PMU counters, ftrace, schedstat | CPU throttle diagnosis, cache miss analysis | `--perf` |
 | **11** | **Cluster Operations** | `panic()`, NMI watchdog, kexec/kdump | Node recovery, rolling upgrades, post-mortem | `--health` |
+| **12** | **KVM Virtualization** | `struct kvm_vcpu`, EPT two-level page walk, virtio ring buffer, `CPUTIME_STEAL` | Steal ≠ throttle, balloon ≠ OOM, SR-IOV for CNI | `--virt` |
+| **13** | **RPi5 Lab** | ARM64 EL0-EL3, `el0_svc`, RVWMO memory model, TTBR0/TTBR1, ARM PMUv3 | k3s two-node cluster, ARM64 portability validation | `--arch` |
 
 ---
 
@@ -168,6 +170,8 @@ cd kube-inspect && make build
 | `--pressure` | ch09 | Node PSI from /proc/pressure/*, pod memory.events OOM counters |
 | `--perf` | ch10 | CPU throttle rate (nr_throttled/nr_periods), per-process wait time |
 | `--health` | ch11 | Kernel version, taint flags, watchdog config, kdump readiness |
+| `--virt` | ch12 | KVM hypervisor: steal time %, balloon pages, virtio devices, EPT/IOMMU state |
+| `--arch` | ch13 | CPU architecture: ARM64 exception levels, PMU type, ASID width, memory model |
 
 ### Example Output
 
@@ -213,6 +217,8 @@ kube-inspect/
 │   ├── sched/       # CPU affinity, NUMA placement, cpu.stat
 │   ├── kubelet/     # kubelet API client (eviction thresholds)
 │   ├── health/      # kernel version, taint, watchdog, kdump
+│   ├── virt/        # KVM hypervisor detection, steal time, balloon, virtio (ch12)
+│   ├── arch/        # CPU architecture info: ARM64 EL, PMU, memory model (ch13)
 │   └── metrics/     # Prometheus exporter + JSON reporter
 ├── bpf/
 │   └── syscall_counter.bpf.c     # eBPF program: per-pod syscall frequency
@@ -237,6 +243,10 @@ When you encounter a Kubernetes symptom in production, these chapters contain th
 | Container sees wrong /proc entries | PID namespace isolation | 01, 02 | `/proc/<pid>/ns/pid`, `lsns` |
 | Performance degrades on multi-socket node | NUMA cross-socket memory access | 04, 08 | `numastat`, `/proc/<pid>/numa_maps` |
 | eBPF tool cannot attach to pod process | cgroup/namespace context | 07 | `/proc/<pid>/cgroup`, `bpftool prog list` |
+| High pod latency, low throttle, zero OOM | CPU steal time (host overcommit) | 12 | `/proc/stat` steal field, `node_cpu_seconds_total{mode="steal"}` |
+| PSI memory pressure, evictions, no OOM | virtio_balloon inflation | 12 | `/proc/meminfo Balloon:`, `dmesg | grep balloon` |
+| Periodic 100-200ms latency spike on all pods | VM live migration blackout | 12 | bpftrace wall-clock gap, no throttle/OOM event |
+| x86 code race-free, ARM64 corrupts data | RVWMO weak memory model, missing barriers | 13 | `dsb`/`dmb` required where x86 TSO was implicit |
 
 ---
 
