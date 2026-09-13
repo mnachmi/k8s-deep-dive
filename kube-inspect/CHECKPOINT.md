@@ -16,3 +16,5 @@ Each chapter adds capabilities to this tool.
 | 09 | Node pressure + eviction thresholds | internal/kubelet | done |
 | 10 | Full perf report — complete tool | internal/metrics | done |
 | 11 | Cluster health + kernel version audit | internal/health | done |
+| 12 | KVM hypervisor detection: steal time, balloon, virtio, EPT/IOMMU | internal/virt | done |
+| 13 | CPU architecture report: ARM64 exception levels, PMU, memory model | internal/arch | done |
